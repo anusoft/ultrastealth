@@ -1,7 +1,4 @@
 rebrowser-playwright
-ipython
-nest-asyncio
-openai
 mcp[cli]
 psutil
 uvicorn

@@ -45,58 +45,26 @@ if __name__ == "__main__":
 
 ---
 
-## Interactive REPLs
+## Benchmark
 
-Ultrastealth comes bundled with two Interactive REPLs for experimenting, debugging, and building scraping logic on the fly. 
-
-To run these REPLs properly from the root directory, ensure you set your Python path:
-
-### 1. Python Async REPL (`repl.py`)
-
-A pure-Python interactive shell powered by IPython. It launches the Ultrastealth browser and drops you into a terminal where you can directly type `await` commands against the live `page` variable.
+`bot_benchmark.py` scores Ultrastealth against ~15 bot-detection / fingerprint sites
+(sannysoft, rebrowser, creepjs, deviceandbrowserinfo, iphey, fingerprint-scan,
+cloudflare, …). Run it under a virtual display:
 
 ```bash
-# From the project root
-source venv/bin/activate
-PYTHONPATH=. python3 -m ultrastealth.repl
+# one-time: start Xvfb on :99 (or use your own display)
+Xvfb :99 -screen 0 1920x1080x24 &
+
+DISPLAY=:99 python3 bot_benchmark.py                      # all sites
+DISPLAY=:99 python3 bot_benchmark.py --sites sannysoft rebrowser
+python3 bot_benchmark.py --compare bot_benchmark_results.json   # reprint table
 ```
 
-**What it does:**
-- Opens a headed Chromium browser.
-- Drops you into an interactive session.
-- You can type standard Playwright commands:
-  ```python
-  await page.goto("https://google.com")
-  await page.locator("input").fill("Hello")
-  await page.evaluate("() => document.title")
-  ```
-
-### 2. LLM Agent REPL (`agent_repl.py`)
-
-A natural language REPL. You type your instructions in plain English, and the agent uses OpenAI's GPT-4o to automatically write and execute the async Playwright code on the live browser.
-
-> **Note:** Requires an OpenAI API key.
-
-```bash
-export OPENAI_API_KEY="your-api-key"
-
-# From the project root
-source venv/bin/activate
-PYTHONPATH=. python3 -m ultrastealth.agent_repl
-```
-
-**Example interaction:**
-```
-Agent> go to google and search for cats
-Thinking...
--- Executing Playwright Code: --
-await page.goto("https://google.com")
-await page.locator("textarea[title='Search']").fill("cats")
-await page.keyboard.press("Enter")
-await page.wait_for_load_state("networkidle")
-print("Search submitted!")
---------------------------------
-```
+Each site has its own extraction JS + scorer; results are written to JSON and printed
+as a table. Notes: `pixelscan`/`incolumitas` only return a verdict from a residential
+IP; `cloudflare` (nowsecure.nl) needs the bundled Turnstile solver. The default
+fingerprint is intentionally the consistent real-Chrome one — set
+`ULTRASTEALTH_BYPASSES=on` to additionally layer the (optional) JS spoofs.
 
 ## MCP Server for Claude Code
 
