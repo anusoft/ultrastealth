@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ultrastealth — maximum-stealth browser automation</title>
+<meta name="description" content="Standalone Python package for maximum-stealth browser automation: rebrowser-playwright with CDP leak fixes, headed Xvfb, and undetectable JS bypasses.">
+<style>
+  :root { --bg:#0b0f17; --card:#131a26; --fg:#e6edf3; --mut:#9aa7b8; --acc:#5eead4; --acc2:#818cf8; --br:#243044; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:880px; margin:0 auto; padding:0 22px; }
+  header { padding:72px 0 36px; text-align:center; }
+  h1 { font-size:2.7rem; margin:0 0 8px; letter-spacing:-.02em; }
+  h1 .dot { color:var(--acc); }
+  .tag { color:var(--mut); font-size:1.18rem; max-width:620px; margin:0 auto; }
+  .cta { margin:26px 0 8px; }
+  .btn { display:inline-block; padding:11px 20px; border-radius:9px; text-decoration:none; font-weight:600; margin:4px; }
+  .btn.primary { background:var(--acc); color:#022; }
+  .btn.ghost { border:1px solid var(--br); color:var(--fg); }
+  section { margin:30px 0; }
+  h2 { font-size:1.25rem; border-bottom:1px solid var(--br); padding-bottom:8px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--br); border-radius:12px; padding:16px 18px; }
+  .card h3 { margin:0 0 6px; font-size:1.02rem; color:var(--acc); }
+  .card p { margin:0; color:var(--mut); font-size:.94rem; }
+  pre { background:#0a0e15; border:1px solid var(--br); border-radius:10px; padding:16px; overflow:auto; }
+  code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.9rem; }
+  footer { color:var(--mut); text-align:center; padding:40px 0; font-size:.9rem; border-top:1px solid var(--br); margin-top:40px; }
+  a { color:var(--acc2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Ultrastealth<span class="dot">.</span></h1>
+    <p class="tag">Maximum-stealth browser automation in Python — real Chrome under Xvfb, <code>rebrowser-playwright</code> with CDP-leak fixes, and undetectable, OS-consistent JS bypasses.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/anusoft/ultrastealth">View on GitHub</a>
+      <a class="btn ghost" href="https://github.com/anusoft/ultrastealth#readme">Documentation</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>Why</h2>
+    <div class="grid">
+      <div class="card"><h3>Driver-level stealth</h3><p>Patches the bundled driver's <code>__pwInitScripts</code> / <code>UtilityScript</code> leaks and runs <code>page.evaluate</code> in an isolated world so main-world execution is undetectable.</p></div>
+      <div class="card"><h3>Headed, not headless</h3><p>Launches real Chrome under Xvfb with a curated flag set — no headless tells, automation flags stripped.</p></div>
+      <div class="card"><h3>Cloudflare-aware</h3><p>Built-in Turnstile / interstitial solver for JS challenges that block raw HTTP clients.</p></div>
+      <div class="card"><h3>Undetectable bypasses</h3><p>Optional JS spoofs use Proxy-based native masking (toString/name read native) and stay OS-consistent. Off by default — opt in with <code>ULTRASTEALTH_BYPASSES=on</code>.</p></div>
+      <div class="card"><h3>MCP server</h3><p>Ships a Model Context Protocol server so agents can drive a stealth browser with click / type / navigate tools.</p></div>
+      <div class="card"><h3>Standalone</h3><p>Pure Python package, no framework lock-in. Async <code>UltrastealthFetcher</code> API.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Quick start</h2>
+    <pre><code>git clone https://github.com/anusoft/ultrastealth
+cd ultrastealth
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -r requirements.txt
+python -m ultrastealth.patch_rebrowser   # patch the driver leaks</code></pre>
+    <pre><code>import asyncio
+from ultrastealth import UltrastealthFetcher
+
+async def main():
+    async with UltrastealthFetcher(headless=False) as us:
+        html = await us.fetch_and_evaluate(
+            url="https://bot.sannysoft.com/",
+            js_expression="() =&gt; document.documentElement.outerHTML",
+            wait_secs=3.0,
+        )
+        print(html[:500])
+
+asyncio.run(main())</code></pre>
+  </section>
+
+  <footer>
+    Ultrastealth · for authorized scraping, QA, and anti-bot research · <a href="https://github.com/anusoft/ultrastealth">github.com/anusoft/ultrastealth</a>
+  </footer>
+</div>
+</body>
+</html>

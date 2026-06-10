@@ -1,0 +1,613 @@
+"""
+Ultrastealth Browser Automation
+================================
+Maximum stealth browser using rebrowser-playwright (CDP leak fix) +
+Xvfb headed mode + enhanced JS bypasses + consistent fingerprint profile.
+
+Combines all known anti-detection techniques for 95%+ pass rate on bot detection sites.
+
+Usage:
+    from web.ultrastealth import UltrastealthFetcher
+
+    async with UltrastealthFetcher() as fetcher:
+        html = await fetcher.fetch("https://example.com")
+        # Or with page action callback:
+        html = await fetcher.fetch("https://example.com", page_action=my_action)
+"""
+
+import asyncio
+import logging
+import os
+import random
+import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+log = logging.getLogger("ultrastealth")
+
+# Cloudflare challenge iframe URL pattern (from Scrapling)
+_CF_PATTERN = re.compile(r"^https://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/")
+
+# Directory containing our enhanced JS bypass scripts
+BYPASSES_DIR = Path(__file__).parent / "bypasses"
+
+# Xvfb display number
+XVFB_DISPLAY = os.environ.get("ULTRASTEALTH_DISPLAY", ":99")
+
+# Chrome executable paths (prefer real Chrome over "for Testing")
+CHROME_PATHS = [
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+]
+
+
+def _find_chrome() -> Optional[str]:
+    """Find a real Chrome/Chromium binary on the system."""
+    for path in CHROME_PATHS:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    # Fall back to shutil.which
+    for name in ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium"]:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _ensure_xvfb() -> Optional[subprocess.Popen]:
+    """Start Xvfb if not already running and DISPLAY is not set."""
+    display = os.environ.get("DISPLAY", "")
+    if display and display != XVFB_DISPLAY:
+        # Real display available (e.g., desktop environment)
+        return None
+
+    # Check if Xvfb is already running on our display
+    xvfb_bin = shutil.which("Xvfb")
+    if not xvfb_bin:
+        log.warning("Xvfb not found — running in headless mode (less stealthy)")
+        return None
+
+    # Check if already running
+    try:
+        result = subprocess.run(
+            ["xdpyinfo", "-display", XVFB_DISPLAY],
+            capture_output=True, timeout=2
+        )
+        if result.returncode == 0:
+            os.environ["DISPLAY"] = XVFB_DISPLAY
+            return None  # Already running
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Start Xvfb
+    proc = subprocess.Popen(
+        [xvfb_bin, XVFB_DISPLAY, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    os.environ["DISPLAY"] = XVFB_DISPLAY
+    # Give it a moment to start
+    import time
+    time.sleep(0.3)
+    log.info(f"Started Xvfb on {XVFB_DISPLAY}")
+    return proc
+
+
+def _load_bypass_scripts() -> str:
+    """Load and concatenate the JS bypass scripts. Default: OFF.
+
+    Benchmark evidence (bot_benchmark.py, 2026-06): on this real-Chrome-on-Linux stack
+    the clean browser fingerprint is already consistent and beats the spoofed one on
+    EVERY fingerprint site (devbrowserinfo 21/21 vs 19/21, fingerprint-scan pass vs
+    95/100 bot-risk, sannysoft 31/31 vs 30/31, rebrowser 6/10 vs 5/10). The JS spoofs
+    (Windows-ish GPU, instance-level navigator overrides, fragile worker patch) add more
+    inconsistencies than they hide. The driver-level stealth that actually wins — real
+    Chrome + Xvfb headful + rebrowser patch + alwaysIsolated — does not live here.
+
+    These scripts were also silently broken for a long time (a syntax error in
+    webdriver_fully.js made V8 reject the whole init script), so production has de-facto
+    run with them OFF. This makes that explicit. They are now repaired and undetectable
+    (Proxy-based native masking, OS-consistent values, IIFE-isolated) for the targets
+    where the GPU/canvas spoofs are specifically needed — opt in with
+    ULTRASTEALTH_BYPASSES=on.
+    """
+    if os.environ.get("ULTRASTEALTH_BYPASSES", "off").lower() not in ("on", "1", "true"):
+        return ""
+
+    scripts = []
+
+    # Load in specific order (dependencies first)
+    order = [
+        "_native_mask.js",
+        "webdriver_fully.js",
+        "window_chrome.js",
+        "navigator_plugins.js",
+        "playwright_fingerprint.js",
+        "screen_props.js",
+        "notification_permission.js",
+        "runtime_enable_fix.js",
+        "hardware_profile.js",
+        "webgl_spoof.js",
+        "canvas_noise.js",
+        "audio_noise.js",
+        "worker_consistency.js",
+    ]
+
+    for filename in order:
+        path = BYPASSES_DIR / filename
+        if not path.exists():
+            log.warning(f"Bypass script not found: {path}")
+            continue
+        body = path.read_text()
+        if filename == "_native_mask.js":
+            # Must stay at the shared top scope so its `const __usMask` is visible to
+            # every later bypass. (It is a lexical binding, not a window property —
+            # invisible to page JS.)
+            scripts.append(f"// === {filename} ===\n{body}")
+        else:
+            # Isolate each bypass in its own IIFE + try/catch. The scripts are
+            # concatenated into ONE init script, so without this:
+            #   - a thrown exception in any bypass would abort the whole remaining chain;
+            #   - a top-level `return` (window_chrome.js has several, reached when
+            #     window.chrome is absent — e.g. insecure origins) would return from the
+            #     entire init function, silently skipping every later spoof.
+            # An IIFE contains both `return` and `throw`, making the spoofs independent.
+            scripts.append(
+                f"// === {filename} ===\n(function(){{\ntry {{\n{body}\n}} catch (e) {{}}\n}})();"
+            )
+
+    return "\n\n".join(scripts)
+
+
+# Stealth Chromium flags (subset of Scrapling's STEALTH_ARGS + our additions)
+STEALTH_FLAGS = [
+    "--test-type",
+    "--lang=en-US",
+    "--mute-audio",
+    "--disable-sync",
+    "--hide-scrollbars",
+    "--disable-logging",
+    "--start-maximized",
+    "--enable-async-dns",
+    "--accept-lang=en-US",
+    "--use-mock-keychain",
+    "--disable-translate",
+    "--disable-voice-input",
+    "--window-position=0,0",
+    "--disable-wake-on-wifi",
+    "--ignore-gpu-blocklist",
+    "--enable-tcp-fast-open",
+    "--enable-web-bluetooth",
+    "--disable-cloud-import",
+    "--disable-print-preview",
+    "--disable-dev-shm-usage",
+    "--metrics-recording-only",
+    "--disable-crash-reporter",
+    "--disable-partial-raster",
+    "--disable-gesture-typing",
+    "--disable-checker-imaging",
+    "--disable-prompt-on-repost",
+    "--force-color-profile=srgb",
+    "--font-render-hinting=none",
+    "--aggressive-cache-discard",
+    "--disable-cookie-encryption",
+    "--disable-domain-reliability",
+    "--disable-threaded-animation",
+    "--disable-threaded-scrolling",
+    "--enable-simple-cache-backend",
+    "--disable-background-networking",
+    "--enable-surface-synchronization",
+    "--disable-image-animation-resync",
+    "--disable-renderer-backgrounding",
+    "--disable-ipc-flooding-protection",
+    "--prerender-from-omnibox=disabled",
+    "--safebrowsing-disable-auto-update",
+    "--disable-offer-upload-credit-cards",
+    "--disable-background-timer-throttling",
+    "--disable-new-content-rendering-timeout",
+    "--run-all-compositor-stages-before-draw",
+    "--disable-client-side-phishing-detection",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-layer-tree-host-memory-pressure",
+    "--autoplay-policy=user-gesture-required",
+    "--disable-offer-store-unmasked-wallet-cards",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-component-extensions-with-background-pages",
+    "--enable-features=NetworkService,NetworkServiceInProcess",
+    "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
+    "--disable-features=AudioServiceOutOfProcess,TranslateUI,BlinkGenPropertyTrees",
+    # WebRTC leak prevention
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--force-webrtc-ip-handling-policy",
+]
+
+# Flags to exclude from Chrome's defaults
+HARMFUL_FLAGS = [
+    "--enable-automation",
+    "--disable-popup-blocking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-extensions",
+]
+
+
+class UltrastealthFetcher:
+    """Maximum stealth async browser automation.
+
+    Combines:
+    - rebrowser-playwright (fixes Runtime.Enable CDP leak)
+    - Xvfb headed mode (eliminates headless detection)
+    - Real Chrome binary (not "Chrome for Testing")
+    - Enhanced JS bypasses (worker consistency, canvas/WebGL/audio noise, hardware profile)
+    - Consistent device fingerprint profile
+    """
+
+    def __init__(
+        self,
+        headless: bool = False,
+        proxy: Optional[dict] = None,
+        timeout: int = 30000,
+        user_data_dir: Optional[str] = None,
+        executable_path: Optional[str] = None,
+    ):
+        self.headless = headless
+        self.proxy = proxy
+        self.timeout = timeout
+        self.user_data_dir = user_data_dir
+        self.executable_path = executable_path or _find_chrome()
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._xvfb_proc = None
+        self._temp_dir = None
+        self._bypass_scripts = _load_bypass_scripts()
+
+    async def __aenter__(self):
+        await self.start()
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
+    async def start(self):
+        """Launch browser with maximum stealth configuration."""
+        # Start Xvfb if needed (for headed mode without a display)
+        if not self.headless:
+            self._xvfb_proc = _ensure_xvfb()
+
+        # Warn if the rebrowser driver fingerprint patch isn't applied. The patch
+        # (rename __pwInitScripts / UtilityScript) is reverted by any
+        # `pip install -U rebrowser-playwright`, so re-run it after upgrades:
+        #     python -m ultrastealth.patch_rebrowser
+        try:
+            from .patch_rebrowser import is_patched
+
+            if not is_patched():
+                log.warning(
+                    "rebrowser driver is NOT fingerprint-patched "
+                    "(run: python -m ultrastealth.patch_rebrowser) — "
+                    "__pwInitScripts / UtilityScript leaks are detectable."
+                )
+        except Exception:
+            pass
+
+        # Run page.evaluate in an ISOLATED world by default (maximum stealth):
+        # this defeats main-world execution detection (e.g. rebrowser's
+        # mainWorldExecution probe). Trade-off: evaluate can read the shared DOM
+        # but not main-world JS globals (window.someAppState). Override by
+        # exporting REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding if you need
+        # main-world JS access. setdefault → an explicit env value always wins.
+        os.environ.setdefault("REBROWSER_PATCHES_RUNTIME_FIX_MODE", "alwaysIsolated")
+
+        # Use rebrowser-playwright for CDP leak fix
+        from rebrowser_playwright.async_api import async_playwright
+
+        self._playwright = await async_playwright().start()
+
+        # Prepare launch args
+        use_headless = self.headless or (not os.environ.get("DISPLAY"))
+
+        # Opt-in CDP endpoint: set ULTRASTEALTH_CDP_PORT to expose a remote
+        # debugging port so an external Playwright client (e.g. the
+        # craft-scraper authoring loop) can connect_over_cdp and drive THIS
+        # stealth browser. Default off — behavior unchanged when unset.
+        stealth_flags = list(STEALTH_FLAGS)
+        _cdp_port = os.environ.get("ULTRASTEALTH_CDP_PORT")
+        if _cdp_port:
+            stealth_flags.append("--remote-debugging-address=127.0.0.1")
+            stealth_flags.append(f"--remote-debugging-port={_cdp_port}")
+            log.info(f"CDP debugging endpoint enabled on 127.0.0.1:{_cdp_port}")
+
+        launch_args = {
+            "args": stealth_flags,
+            "ignore_default_args": HARMFUL_FLAGS,
+            "headless": use_headless,
+        }
+
+        if self.executable_path:
+            launch_args["executable_path"] = self.executable_path
+            log.info(f"Using Chrome: {self.executable_path}")
+        else:
+            launch_args["channel"] = "chrome"
+            log.info("Using bundled Chromium (no system Chrome found)")
+
+        # Create temp user data dir if not provided
+        if not self.user_data_dir:
+            self._temp_dir = tempfile.mkdtemp(prefix="ultrastealth_")
+            self.user_data_dir = self._temp_dir
+
+        # Launch persistent context (more realistic than incognito)
+        context_opts: dict[str, Any] = {
+            "color_scheme": "dark",
+            "device_scale_factor": 2,
+            "is_mobile": False,
+            "has_touch": False,
+            "service_workers": "allow",
+            "ignore_https_errors": True,
+            "screen": {"width": 1920, "height": 1080},
+            "viewport": {"width": 1920, "height": 1080},
+            "permissions": ["geolocation", "notifications"],
+            "locale": "en-US",
+            "timezone_id": "America/New_York",
+        }
+
+        if self.proxy:
+            context_opts["proxy"] = self.proxy
+
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            self.user_data_dir,
+            **launch_args,
+            **context_opts,
+        )
+
+        # Inject stealth scripts into all new pages
+        await self._context.add_init_script(self._bypass_scripts)
+
+        log.info(f"Ultrastealth browser started (headless={use_headless})")
+
+    async def close(self):
+        """Clean up browser and Xvfb."""
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+            self._context = None
+
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
+
+        if self._xvfb_proc:
+            self._xvfb_proc.terminate()
+            self._xvfb_proc = None
+
+        if self._temp_dir and os.path.exists(self._temp_dir):
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._temp_dir = None
+
+    @staticmethod
+    def _detect_cloudflare(page_content: str) -> Optional[str]:
+        """Detect Cloudflare challenge type from page HTML.
+
+        Returns "non-interactive", "managed", "interactive", "embedded" or None.
+        Port of Scrapling's StealthySessionMixin._detect_cloudflare.
+        """
+        for ctype in ("non-interactive", "managed", "interactive"):
+            if f"cType: '{ctype}'" in page_content:
+                return ctype
+        # Embedded Turnstile widget (script tag loaded)
+        if 'challenges.cloudflare.com/turnstile/v' in page_content:
+            return "embedded"
+        return None
+
+    async def solve_cloudflare(self, page, max_wait_secs: float = 20.0) -> bool:
+        """Auto-solve Cloudflare Turnstile/Interstitial challenges.
+
+        Ports Scrapling StealthySession._cloudflare_solver logic. Detects the
+        challenge type, waits for non-interactive challenges to auto-clear, or
+        clicks the Turnstile widget for interactive/managed types. Retries
+        recursively if the challenge re-appears (CF sometimes shows it twice).
+
+        Args:
+            page: Playwright page object (after goto)
+            max_wait_secs: Overall ceiling for the solving loop
+
+        Returns:
+            True if no CF challenge detected after solving, False if still blocked.
+        """
+        # Let the page settle so CF scripts can initialize
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+
+        page_content = await page.evaluate("document.documentElement.outerHTML")
+        challenge_type = self._detect_cloudflare(page_content)
+        if not challenge_type:
+            log.debug("No Cloudflare challenge detected")
+            return True  # already through
+
+        log.info(f"Cloudflare challenge detected: {challenge_type}")
+
+        if challenge_type == "non-interactive":
+            # Wait for the "Just a moment..." page to disappear
+            deadline = asyncio.get_event_loop().time() + max_wait_secs
+            while asyncio.get_event_loop().time() < deadline:
+                content = await page.evaluate("document.documentElement.outerHTML")
+                if "<title>Just a moment..." not in content:
+                    log.info("Cloudflare non-interactive challenge cleared")
+                    return True
+                await asyncio.sleep(1)
+            log.warning("Cloudflare non-interactive challenge timeout")
+            return False
+
+        # Interactive / managed / embedded: need to click the widget
+        box_selector = "#cf_turnstile div, #cf-turnstile div, .turnstile>div>div"
+        if challenge_type != "embedded":
+            box_selector = ".main-content p+div>div>div"
+            # Wait for the verify spinner to disappear
+            spinner_deadline = asyncio.get_event_loop().time() + 10
+            while asyncio.get_event_loop().time() < spinner_deadline:
+                content = await page.evaluate("document.documentElement.outerHTML")
+                if "Verifying you are human." not in content:
+                    break
+                await asyncio.sleep(0.5)
+
+        # Find the Turnstile iframe
+        outer_box = None
+        iframe_frame = None
+        for frame in page.frames:
+            if _CF_PATTERN.match(frame.url or ""):
+                iframe_frame = frame
+                break
+
+        if iframe_frame is not None:
+            try:
+                frame_elem = await iframe_frame.frame_element()
+                # Wait for iframe to be visible
+                visible_deadline = asyncio.get_event_loop().time() + 10
+                while asyncio.get_event_loop().time() < visible_deadline:
+                    if await frame_elem.is_visible():
+                        break
+                    await asyncio.sleep(0.5)
+                outer_box = await frame_elem.bounding_box()
+            except Exception as e:
+                log.debug(f"Could not get iframe bounding box: {e}")
+
+        if not outer_box:
+            # If iframe not found, check if already solved
+            content = await page.evaluate("document.documentElement.outerHTML")
+            if "<title>Just a moment..." not in content:
+                log.info("Cloudflare challenge auto-cleared")
+                return True
+            # Fall back to locator on the outer box
+            try:
+                locator = page.locator(box_selector).last
+                outer_box = await locator.bounding_box()
+            except Exception as e:
+                log.warning(f"Could not locate Turnstile widget: {e}")
+                return False
+
+        if not outer_box:
+            return False
+
+        # Click inside the Turnstile checkbox area with randomized offset
+        cx = outer_box["x"] + random.randint(26, 28)
+        cy = outer_box["y"] + random.randint(25, 27)
+        await page.mouse.click(cx, cy, delay=random.randint(100, 200), button="left")
+
+        # Wait for network to settle after click
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+
+        # Verify the challenge cleared
+        if challenge_type != "embedded":
+            clear_deadline = asyncio.get_event_loop().time() + max_wait_secs
+            while asyncio.get_event_loop().time() < clear_deadline:
+                content = await page.evaluate("document.documentElement.outerHTML")
+                if "<title>Just a moment..." not in content:
+                    break
+                await asyncio.sleep(0.1)
+
+        # Final check — recurse once if still blocked (CF sometimes shows 2x)
+        content = await page.evaluate("document.documentElement.outerHTML")
+        if "<title>Just a moment..." in content:
+            log.info("Cloudflare still present — solving again")
+            return await self.solve_cloudflare(page, max_wait_secs=max_wait_secs)
+
+        log.info("Cloudflare challenge solved")
+        return True
+
+    async def fetch(
+        self,
+        url: str,
+        wait_secs: float = 3.0,
+        page_action: Optional[Callable] = None,
+        solve_cloudflare: bool = False,
+    ) -> str:
+        """Fetch a URL with maximum stealth, return HTML content.
+
+        Args:
+            url: URL to fetch
+            wait_secs: Seconds to wait after navigation for JS to execute
+            page_action: Optional async callback(page) for custom interaction
+            solve_cloudflare: If True, auto-solve Cloudflare Turnstile/Interstitial challenges
+        """
+        if not self._context:
+            raise RuntimeError("Browser not started. Use 'async with UltrastealthFetcher()' or call start().")
+
+        page = await self._context.new_page()
+        try:
+            # Navigate
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
+
+            # Wait for content to load
+            await asyncio.sleep(wait_secs)
+
+            # Auto-solve Cloudflare if requested
+            if solve_cloudflare:
+                await self.solve_cloudflare(page)
+
+            # Run custom page action if provided
+            if page_action:
+                await page_action(page)
+
+            # Extract HTML using evaluate (avoids page.content() hang on SPAs)
+            html = await page.evaluate("document.documentElement.outerHTML")
+            return html
+        finally:
+            await page.close()
+
+    async def fetch_and_evaluate(
+        self,
+        url: str,
+        js_expression: str,
+        wait_secs: float = 3.0,
+        pre_eval_js: Optional[list[str]] = None,
+        solve_cloudflare: bool = False,
+    ) -> Any:
+        """Fetch URL and evaluate JavaScript, return the result.
+
+        Args:
+            url: URL to fetch
+            js_expression: JS expression to evaluate (should be a function body returning a value)
+            wait_secs: Seconds to wait after navigation
+            pre_eval_js: Optional list of JS expressions to run before the main evaluation
+            solve_cloudflare: If True, auto-solve Cloudflare Turnstile/Interstitial challenges
+        """
+        if not self._context:
+            raise RuntimeError("Browser not started.")
+
+        page = await self._context.new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
+            await asyncio.sleep(wait_secs)
+
+            # Auto-solve Cloudflare if requested
+            if solve_cloudflare:
+                await self.solve_cloudflare(page)
+
+            # Run pre-evaluation scripts (e.g., scroll, click)
+            if pre_eval_js:
+                for expr in pre_eval_js:
+                    try:
+                        await page.evaluate(expr)
+                    except Exception as e:
+                        log.debug(f"Pre-eval script failed: {e}")
+                await asyncio.sleep(wait_secs)
+
+            # Evaluate main expression
+            result = await page.evaluate(js_expression)
+            return result
+        finally:
+            await page.close()
