@@ -214,46 +214,24 @@ python3 -m ultrastealth.patch_rebrowser</code></pre>
     <h2><span class="num">2</span>Install the script-authoring skill</h2>
     <p class="sub"><strong>craft-scraper</strong> runs a one-time LLM authoring loop and emits a <em>reusable, deterministic</em> script that reruns forever with no LLM. It uses the MCP to inspect the site, then writes a <span class="hl">scrapling-js</span> script (fast, for APIs) or an <span class="hl">Ultrastealth</span> script (for protected/JS sites) — automatically picking the right one.</p>
 
-    <div class="tabs" role="tablist">
-      <div class="tab active" data-tab="scc">Claude Code</div>
-      <div class="tab" data-tab="scodex">Codex</div>
-      <div class="tab" data-tab="soc">OpenCode</div>
-      <div class="tab" data-tab="scursor">Cursor</div>
-    </div>
+    <h4>One command — installs into whatever agent you use</h4>
+    <pre><code># the `skills` CLI (vercel-labs/skills) auto-detects your agent and
+# installs to the right place — Claude Code, Codex, Cursor, OpenCode + 70 more
+npx skills add anusoft/ultrastealth --skill craft-scraper</code></pre>
+    <p class="note">Detects installed agents automatically; if it can't, it asks which to use. Run inside a project for project scope, or add <code>-g</code> for global (<code>~/.claude/skills/</code> etc.). <span class="hl">Bun users:</span> <code>bunx skills add …</code> works the same.</p>
 
-    <div class="panel active" data-panel="scc">
-      <h4>Install as a skill</h4>
+    <h4>Pick agents explicitly / non-interactive (CI)</h4>
+    <pre><code>npx skills add anusoft/ultrastealth --skill craft-scraper -g -y \
+  -a claude-code -a codex -a cursor -a opencode</code></pre>
+    <p class="note">After installing, just ask — or run <span class="kbd">/craft-scraper &lt;task + url&gt;</span>. Manage with <code>npx skills list</code> / <code>update</code> / <code>remove</code>.</p>
+
+    <details>
+      <summary>Manual install (no <code>skills</code> CLI)</summary>
       <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
-mkdir -p ~/.claude/skills
+mkdir -p ~/.claude/skills          # or your agent's skills dir
 cp -r /tmp/ultrastealth/skills/craft-scraper ~/.claude/skills/</code></pre>
-      <p class="note">Then just ask, or run <span class="kbd">/craft-scraper &lt;task + url&gt;</span>.</p>
-    </div>
-
-    <div class="panel" data-panel="scodex">
-      <h4>Install as a prompt</h4>
-      <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
-mkdir -p ~/.codex/prompts
-cp /tmp/ultrastealth/skills/craft-scraper/SKILL.md ~/.codex/prompts/craft-scraper.md</code></pre>
-      <p class="note">Invoke with <span class="kbd">/craft-scraper</span> in the Codex TUI.</p>
-    </div>
-
-    <div class="panel" data-panel="soc">
-      <h4>Install as a command</h4>
-      <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
-mkdir -p ~/.config/opencode/command
-cp /tmp/ultrastealth/skills/craft-scraper/SKILL.md ~/.config/opencode/command/craft-scraper.md</code></pre>
-      <p class="note">Invoke with <span class="kbd">/craft-scraper</span>.</p>
-    </div>
-
-    <div class="panel" data-panel="scursor">
-      <h4>Install as a rule</h4>
-      <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
-mkdir -p .cursor/rules
-cp /tmp/ultrastealth/skills/craft-scraper/SKILL.md .cursor/rules/craft-scraper.mdc</code></pre>
-      <p class="note">Cursor loads it as project context; ask it to "craft a scraper for &lt;url&gt;".</p>
-    </div>
-
-    <p class="note" style="margin-top:14px">Codex, OpenCode and Cursor have no Claude-style "skills" — but the skill is plain Markdown, so it drops in as each tool's native prompt/command/rule. The instructions and the MCP tool names are identical across all four.</p>
+      <p class="note">The skill is plain Markdown (<code>skills/craft-scraper/SKILL.md</code> + <code>reference/</code>), so it also drops in as any tool's native prompt/command/rule.</p>
+    </details>
   </section>
 
   <!-- WORKFLOW -->
