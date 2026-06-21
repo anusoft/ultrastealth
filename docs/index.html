@@ -122,7 +122,7 @@
 pipx install --include-deps git+https://github.com/anusoft/ultrastealth.git
 
 # Install the Chromium build rebrowser drives, then patch the driver's CDP leaks
-rebrowser-playwright install chromium
+rebrowser_playwright install chromium   # note: underscore — that's the pipx-exposed name
 ultrastealth-patch            # re-run after any `pipx upgrade ultrastealth`</code></pre>
     <p class="note">Linux headed mode needs an X server — <code>sudo apt install xvfb</code> and run your agent under <code>xvfb-run -a</code> (or set <code>DISPLAY</code>). Prefer not to use <code>pipx</code>? See the <a href="#clone">clone install</a> below.</p>
 
@@ -203,7 +203,7 @@ args = ["--transport", "stdio"]</code></pre>
 cd ultrastealth
 python3 -m venv .venv &amp;&amp; source .venv/bin/activate
 pip install -r requirements.txt
-rebrowser-playwright install chromium
+rebrowser_playwright install chromium
 python3 -m ultrastealth.patch_rebrowser</code></pre>
       <p>Then use <code>"command": "python3"</code>, <code>"args": ["-m","ultrastealth.mcp_server","--transport","stdio"]</code> and set the tool's working directory (or MCP <code>cwd</code>) to the clone.</p>
     </details>
