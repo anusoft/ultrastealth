@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ultrastealth"
+version = "0.1.0"
+description = "Maximum-stealth browser automation in Python — rebrowser-playwright (CDP-leak fixes) + Xvfb + undetectable, OS-consistent JS bypasses + MCP server."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "anu" }]
+keywords = ["scraping", "stealth", "playwright", "anti-bot", "mcp", "automation"]
+dependencies = [
+    "rebrowser-playwright",
+    "nest-asyncio",
+    "mcp[cli]",
+    "psutil",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+# Interactive REPLs (ultrastealth.repl / ultrastealth.agent_repl)
+repl = ["ipython", "openai"]
+
+[project.urls]
+Homepage = "https://anusoft.github.io/ultrastealth/"
+Repository = "https://github.com/anusoft/ultrastealth"
+
+[project.scripts]
+ultrastealth-mcp = "ultrastealth.mcp_server:main"
+ultrastealth-patch = "ultrastealth.patch_rebrowser:main"
+
+# The published repo keeps the package modules at the repository root, so map the
+# `ultrastealth` import package to "." (the directory containing this file).
+[tool.setuptools]
+packages = ["ultrastealth"]
+
+[tool.setuptools.package-dir]
+ultrastealth = "."
+
+[tool.setuptools.package-data]
+ultrastealth = ["bypasses/*.js", "example/*"]

@@ -3,68 +3,285 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ultrastealth — maximum-stealth browser automation</title>
-<meta name="description" content="Standalone Python package for maximum-stealth browser automation: rebrowser-playwright with CDP leak fixes, headed Xvfb, and undetectable JS bypasses.">
+<title>Ultrastealth — stealth browser automation + MCP for AI agents</title>
+<meta name="description" content="Maximum-stealth browser automation in Python with an MCP server and a script-authoring skill. Real Chrome under Xvfb, rebrowser-playwright CDP-leak fixes, undetectable JS bypasses. One-line MCP install for Claude Code, Codex, OpenCode and Cursor.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A5%B7%3C/text%3E%3C/svg%3E">
 <style>
-  :root { --bg:#0b0f17; --card:#131a26; --fg:#e6edf3; --mut:#9aa7b8; --acc:#5eead4; --acc2:#818cf8; --br:#243044; }
+  :root { --bg:#0b0f17; --card:#131a26; --card2:#0f1622; --fg:#e6edf3; --mut:#9aa7b8; --acc:#5eead4; --acc2:#818cf8; --br:#243044; --ok:#34d399; --warn:#f59e0b; }
   * { box-sizing:border-box; }
   body { margin:0; font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); }
-  .wrap { max-width:880px; margin:0 auto; padding:0 22px; }
-  header { padding:72px 0 36px; text-align:center; }
-  h1 { font-size:2.7rem; margin:0 0 8px; letter-spacing:-.02em; }
+  .wrap { max-width:920px; margin:0 auto; padding:0 22px; }
+  header { padding:72px 0 28px; text-align:center; }
+  .badge { display:inline-block; font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; color:var(--acc); border:1px solid var(--br); border-radius:999px; padding:4px 12px; margin-bottom:18px; }
+  h1 { font-size:2.8rem; margin:0 0 10px; letter-spacing:-.02em; }
   h1 .dot { color:var(--acc); }
-  .tag { color:var(--mut); font-size:1.18rem; max-width:620px; margin:0 auto; }
-  .cta { margin:26px 0 8px; }
+  .tag { color:var(--mut); font-size:1.18rem; max-width:680px; margin:0 auto; }
+  .cta { margin:28px 0 8px; }
   .btn { display:inline-block; padding:11px 20px; border-radius:9px; text-decoration:none; font-weight:600; margin:4px; }
   .btn.primary { background:var(--acc); color:#022; }
   .btn.ghost { border:1px solid var(--br); color:var(--fg); }
-  section { margin:30px 0; }
-  h2 { font-size:1.25rem; border-bottom:1px solid var(--br); padding-bottom:8px; }
+  section { margin:44px 0; }
+  h2 { font-size:1.4rem; margin-bottom:6px; }
+  h2 .num { color:var(--acc2); font-weight:700; margin-right:8px; }
+  .sub { color:var(--mut); margin:0 0 18px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; }
   .card { background:var(--card); border:1px solid var(--br); border-radius:12px; padding:16px 18px; }
   .card h3 { margin:0 0 6px; font-size:1.02rem; color:var(--acc); }
   .card p { margin:0; color:var(--mut); font-size:.94rem; }
-  pre { background:#0a0e15; border:1px solid var(--br); border-radius:10px; padding:16px; overflow:auto; }
-  code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.9rem; }
-  footer { color:var(--mut); text-align:center; padding:40px 0; font-size:.9rem; border-top:1px solid var(--br); margin-top:40px; }
+  pre { background:#0a0e15; border:1px solid var(--br); border-radius:10px; padding:16px; overflow:auto; margin:10px 0; }
+  code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.88rem; }
+  p code, li code, td code { background:#0a0e15; border:1px solid var(--br); border-radius:5px; padding:1px 5px; font-size:.85rem; }
   a { color:var(--acc2); }
+  .pick { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .pick .card.us { border-color:#2c4a45; }
+  .pick .card.js { border-color:#3a3450; }
+  .pick h3 { font-size:1.08rem; }
+  .pick .when { color:var(--fg); font-weight:600; font-size:.9rem; margin:10px 0 2px; }
+  .pick ul { margin:6px 0 0; padding-left:18px; color:var(--mut); font-size:.9rem; }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; margin-top:8px; }
+  th,td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--br); vertical-align:top; }
+  th { color:var(--mut); font-weight:600; }
+  .tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:0; }
+  .tab { background:var(--card2); border:1px solid var(--br); border-bottom:none; border-radius:8px 8px 0 0; padding:9px 16px; cursor:pointer; color:var(--mut); font-weight:600; font-size:.92rem; }
+  .tab.active { background:var(--card); color:var(--acc); border-color:var(--br); }
+  .panel { display:none; background:var(--card); border:1px solid var(--br); border-radius:0 10px 10px 10px; padding:6px 18px 16px; }
+  .panel.active { display:block; }
+  .panel h4 { margin:16px 0 2px; font-size:.95rem; color:var(--fg); }
+  .panel pre { margin-top:6px; }
+  .note { font-size:.86rem; color:var(--mut); }
+  .hl { color:var(--acc); }
+  details { background:var(--card); border:1px solid var(--br); border-radius:10px; padding:8px 16px; margin:10px 0; }
+  summary { cursor:pointer; font-weight:600; }
+  footer { color:var(--mut); text-align:center; padding:40px 0; font-size:.9rem; border-top:1px solid var(--br); margin-top:50px; }
+  .kbd { background:#0a0e15; border:1px solid var(--br); border-radius:5px; padding:1px 6px; font-size:.82rem; }
+  @media (max-width:620px){ .pick{grid-template-columns:1fr;} h1{font-size:2.2rem;} }
 </style>
 </head>
 <body>
 <div class="wrap">
+
   <header>
+    <span class="badge">🥷 stealth · 🤖 mcp · 🛠 skill</span>
     <h1>Ultrastealth<span class="dot">.</span></h1>
-    <p class="tag">Maximum-stealth browser automation in Python — real Chrome under Xvfb, <code>rebrowser-playwright</code> with CDP-leak fixes, and undetectable, OS-consistent JS bypasses.</p>
+    <p class="tag">Maximum-stealth browser automation in Python — plus an <strong>MCP server</strong> and a <strong>script-authoring skill</strong> that let your AI agent scrape even <em>highly protected</em> sites. Real Chrome under Xvfb, <code>rebrowser-playwright</code> CDP-leak fixes, undetectable OS-consistent JS bypasses.</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/anusoft/ultrastealth">View on GitHub</a>
-      <a class="btn ghost" href="https://github.com/anusoft/ultrastealth#readme">Documentation</a>
+      <a class="btn primary" href="#install">Install the MCP</a>
+      <a class="btn ghost" href="https://github.com/anusoft/ultrastealth">View on GitHub</a>
     </div>
   </header>
 
-  <section>
-    <h2>Why</h2>
-    <div class="grid">
-      <div class="card"><h3>Driver-level stealth</h3><p>Patches the bundled driver's <code>__pwInitScripts</code> / <code>UtilityScript</code> leaks and runs <code>page.evaluate</code> in an isolated world so main-world execution is undetectable.</p></div>
-      <div class="card"><h3>Headed, not headless</h3><p>Launches real Chrome under Xvfb with a curated flag set — no headless tells, automation flags stripped.</p></div>
-      <div class="card"><h3>Cloudflare-aware</h3><p>Built-in Turnstile / interstitial solver for JS challenges that block raw HTTP clients.</p></div>
-      <div class="card"><h3>Undetectable bypasses</h3><p>Optional JS spoofs use Proxy-based native masking (toString/name read native) and stay OS-consistent. Off by default — opt in with <code>ULTRASTEALTH_BYPASSES=on</code>.</p></div>
-      <div class="card"><h3>MCP server</h3><p>Ships a Model Context Protocol server so agents can drive a stealth browser with click / type / navigate tools.</p></div>
-      <div class="card"><h3>Standalone</h3><p>Pure Python package, no framework lock-in. Async <code>UltrastealthFetcher</code> API.</p></div>
+  <!-- WHICH TOOL -->
+  <section id="pick">
+    <h2>Two tools, one decision</h2>
+    <p class="sub">Pick by the target site. The <a href="#skill">craft-scraper skill</a> generates a reusable script in whichever fits — and uses the Ultrastealth MCP to figure out which.</p>
+    <div class="pick">
+      <div class="card us">
+        <h3>🥷 Ultrastealth <span class="note">— this project</span></h3>
+        <p>Headed real-Chrome automation that passes bot detection.</p>
+        <div class="when">Use it for</div>
+        <ul>
+          <li>Highly protected sites (Cloudflare, Imperva, DataDome)</li>
+          <li>JS-rendered SPAs with no usable API</li>
+          <li>Tasks needing clicks, forms, multi-step flows</li>
+        </ul>
+      </div>
+      <div class="card js">
+        <h3>⚡ <a href="https://anusoft.github.io/scrapling-js/">scrapling-js</a> <span class="note">— sibling</span></h3>
+        <p>Pure-HTTP, no-browser fetching with TLS impersonation.</p>
+        <div class="when">Use it for</div>
+        <ul>
+          <li>JSON APIs &amp; embedded JSON (<code>__NEXT_DATA__</code>)</li>
+          <li>Maximum speed &amp; throughput (no browser)</li>
+          <li>Cloudflare Workers / edge deploys</li>
+        </ul>
+      </div>
     </div>
   </section>
 
-  <section>
-    <h2>Quick start</h2>
-    <pre><code>git clone https://github.com/anusoft/ultrastealth
+  <!-- WHY -->
+  <section id="why">
+    <h2>Why it stays invisible</h2>
+    <p class="sub">Detection is fought at the driver, the browser, and the page — not just with a spoofed user-agent.</p>
+    <div class="grid">
+      <div class="card"><h3>Driver-level patch</h3><p>Renames <code>rebrowser-playwright</code>'s leaked <code>__pwInitScripts</code> / <code>UtilityScript</code> identifiers at the driver source. Lifts the rebrowser bot score <strong>6/10 → 8/10</strong>.</p></div>
+      <div class="card"><h3>Isolated-world evaluate</h3><p><code>REBROWSER_PATCHES_RUNTIME_FIX_MODE=alwaysIsolated</code> runs <code>page.evaluate</code> off the main world → <strong>0 positive detections</strong> on rebrowser's probe.</p></div>
+      <div class="card"><h3>Headed, not headless</h3><p>Launches real Chrome under Xvfb with a curated flag set — no headless tells, automation flags stripped, <code>navigator.webdriver:false</code>.</p></div>
+      <div class="card"><h3>Undetectable bypasses</h3><p>Optional WebGL/canvas/audio/font spoofs use Proxy native-masking (<code>toString</code>/<code>name</code> read native) and stay OS-consistent. Opt in with <code>ULTRASTEALTH_BYPASSES=on</code>.</p></div>
+      <div class="card"><h3>WebRTC leak closed</h3><p>Camoufox-ported <code>webrtc_spoof.js</code> drops real-IP ICE candidates so a proxy isn't betrayed by a WebRTC IP leak.</p></div>
+      <div class="card"><h3>Network DevTools for agents</h3><p>The MCP exposes Chrome-DevTools-style capture (<code>browser_network_log</code>/<code>_detail</code>/<code>_response_body</code>) — perfect for discovering JSON APIs.</p></div>
+    </div>
+  </section>
+
+  <!-- INSTALL MCP -->
+  <section id="install">
+    <h2><span class="num">1</span>Install the MCP server</h2>
+    <p class="sub">Give your coding agent a stealth browser it can drive: navigate, click, type, screenshot, and capture network traffic — all anti-detection.</p>
+
+    <h4>Setup once</h4>
+    <pre><code># Install ultrastealth + the MCP server (exposes the `ultrastealth-mcp` command)
+pipx install --include-deps git+https://github.com/anusoft/ultrastealth.git
+
+# Install the Chromium build rebrowser drives, then patch the driver's CDP leaks
+rebrowser-playwright install chromium
+ultrastealth-patch            # re-run after any `pipx upgrade ultrastealth`</code></pre>
+    <p class="note">Linux headed mode needs an X server — <code>sudo apt install xvfb</code> and run your agent under <code>xvfb-run -a</code> (or set <code>DISPLAY</code>). Prefer not to use <code>pipx</code>? See the <a href="#clone">clone install</a> below.</p>
+
+    <h4>Then wire it into your tool</h4>
+    <div class="tabs" role="tablist">
+      <div class="tab active" data-tab="cc">Claude Code</div>
+      <div class="tab" data-tab="codex">Codex</div>
+      <div class="tab" data-tab="oc">OpenCode</div>
+      <div class="tab" data-tab="cursor">Cursor</div>
+    </div>
+
+    <div class="panel active" data-panel="cc">
+      <h4>One command</h4>
+      <pre><code>claude mcp add ultrastealth -- ultrastealth-mcp --transport stdio</code></pre>
+      <h4>or edit <code>.mcp.json</code> (project) / <code>~/.claude/settings.json</code> (global)</h4>
+      <pre><code>{
+  "mcpServers": {
+    "ultrastealth": {
+      "command": "ultrastealth-mcp",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}</code></pre>
+      <p class="note">Restart, then run <span class="kbd">/mcp</span> to confirm the <span class="hl">ultrastealth</span> tools are listed.</p>
+    </div>
+
+    <div class="panel" data-panel="codex">
+      <h4>Add to <code>~/.codex/config.toml</code></h4>
+      <pre><code>[mcp_servers.ultrastealth]
+command = "ultrastealth-mcp"
+args = ["--transport", "stdio"]</code></pre>
+      <h4>or, on recent Codex CLI</h4>
+      <pre><code>codex mcp add ultrastealth -- ultrastealth-mcp --transport stdio</code></pre>
+      <p class="note">Codex speaks stdio MCP — keep <code>--transport stdio</code>.</p>
+    </div>
+
+    <div class="panel" data-panel="oc">
+      <h4>Add to <code>opencode.json</code> (project) or <code>~/.config/opencode/opencode.json</code></h4>
+      <pre><code>{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ultrastealth": {
+      "type": "local",
+      "command": ["ultrastealth-mcp", "--transport", "stdio"],
+      "enabled": true
+    }
+  }
+}</code></pre>
+    </div>
+
+    <div class="panel" data-panel="cursor">
+      <h4>Add to <code>~/.cursor/mcp.json</code> (global) or <code>.cursor/mcp.json</code> (project)</h4>
+      <pre><code>{
+  "mcpServers": {
+    "ultrastealth": {
+      "command": "ultrastealth-mcp",
+      "args": ["--transport", "stdio"]
+    }
+  }
+}</code></pre>
+      <p class="note">Enable it under <strong>Settings → MCP</strong>, then call its tools from chat.</p>
+    </div>
+
+    <details>
+      <summary>Alternative: one shared HTTP server (always-on, multi-tool)</summary>
+      <p>Run the server once and point every tool at a URL instead of spawning a process each:</p>
+      <pre><code>ultrastealth-mcp --port 8090          # serves http://localhost:8090/mcp</code></pre>
+      <ul>
+        <li><strong>Claude Code:</strong> <code>claude mcp add --transport http ultrastealth http://localhost:8090/mcp</code></li>
+        <li><strong>Cursor:</strong> <code>{ "mcpServers": { "ultrastealth": { "url": "http://localhost:8090/mcp" } } }</code></li>
+        <li><strong>OpenCode:</strong> <code>{ "mcp": { "ultrastealth": { "type": "remote", "url": "http://localhost:8090/mcp", "enabled": true } } }</code></li>
+      </ul>
+    </details>
+
+    <details id="clone">
+      <summary>Alternative: clone install (no pipx)</summary>
+      <pre><code>git clone https://github.com/anusoft/ultrastealth.git
 cd ultrastealth
-python -m venv .venv &amp;&amp; source .venv/bin/activate
+python3 -m venv .venv &amp;&amp; source .venv/bin/activate
 pip install -r requirements.txt
-python -m ultrastealth.patch_rebrowser   # patch the driver leaks</code></pre>
+rebrowser-playwright install chromium
+python3 -m ultrastealth.patch_rebrowser</code></pre>
+      <p>Then use <code>"command": "python3"</code>, <code>"args": ["-m","ultrastealth.mcp_server","--transport","stdio"]</code> and set the tool's working directory (or MCP <code>cwd</code>) to the clone.</p>
+    </details>
+  </section>
+
+  <!-- INSTALL SKILL -->
+  <section id="skill">
+    <h2><span class="num">2</span>Install the script-authoring skill</h2>
+    <p class="sub"><strong>craft-scraper</strong> runs a one-time LLM authoring loop and emits a <em>reusable, deterministic</em> script that reruns forever with no LLM. It uses the MCP to inspect the site, then writes a <span class="hl">scrapling-js</span> script (fast, for APIs) or an <span class="hl">Ultrastealth</span> script (for protected/JS sites) — automatically picking the right one.</p>
+
+    <div class="tabs" role="tablist">
+      <div class="tab active" data-tab="scc">Claude Code</div>
+      <div class="tab" data-tab="scodex">Codex</div>
+      <div class="tab" data-tab="soc">OpenCode</div>
+      <div class="tab" data-tab="scursor">Cursor</div>
+    </div>
+
+    <div class="panel active" data-panel="scc">
+      <h4>Install as a skill</h4>
+      <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
+mkdir -p ~/.claude/skills
+cp -r /tmp/ultrastealth/skills/craft-scraper ~/.claude/skills/</code></pre>
+      <p class="note">Then just ask, or run <span class="kbd">/craft-scraper &lt;task + url&gt;</span>.</p>
+    </div>
+
+    <div class="panel" data-panel="scodex">
+      <h4>Install as a prompt</h4>
+      <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
+mkdir -p ~/.codex/prompts
+cp /tmp/ultrastealth/skills/craft-scraper/SKILL.md ~/.codex/prompts/craft-scraper.md</code></pre>
+      <p class="note">Invoke with <span class="kbd">/craft-scraper</span> in the Codex TUI.</p>
+    </div>
+
+    <div class="panel" data-panel="soc">
+      <h4>Install as a command</h4>
+      <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
+mkdir -p ~/.config/opencode/command
+cp /tmp/ultrastealth/skills/craft-scraper/SKILL.md ~/.config/opencode/command/craft-scraper.md</code></pre>
+      <p class="note">Invoke with <span class="kbd">/craft-scraper</span>.</p>
+    </div>
+
+    <div class="panel" data-panel="scursor">
+      <h4>Install as a rule</h4>
+      <pre><code>git clone --depth 1 https://github.com/anusoft/ultrastealth.git /tmp/ultrastealth
+mkdir -p .cursor/rules
+cp /tmp/ultrastealth/skills/craft-scraper/SKILL.md .cursor/rules/craft-scraper.mdc</code></pre>
+      <p class="note">Cursor loads it as project context; ask it to "craft a scraper for &lt;url&gt;".</p>
+    </div>
+
+    <p class="note" style="margin-top:14px">Codex, OpenCode and Cursor have no Claude-style "skills" — but the skill is plain Markdown, so it drops in as each tool's native prompt/command/rule. The instructions and the MCP tool names are identical across all four.</p>
+  </section>
+
+  <!-- WORKFLOW -->
+  <section id="workflow">
+    <h2><span class="num">3</span>What it looks like</h2>
+    <p class="sub">Ask once. Get a script you can rerun forever.</p>
+    <pre><code>You ▸ /craft-scraper download every product from shop.example.com/catalog
+
+Agent ▸ browser_network_enable()            # MCP: stealth browser
+        browser_navigate("…/catalog")
+        browser_network_log(filter_type="xhr")
+        → found JSON API  /api/products?page=N   ✓ Path A (speed)
+        ↳ writes  scrape_example.js  (scrapling-js, no browser at runtime)
+        bun run scrape_example.js  → 1,284 products across 13 pages ✓
+
+# rerun anytime, no LLM:
+bun run scrape_example.js --resume</code></pre>
+    <p class="note">No API and Cloudflare in the way? The agent falls back to <strong>Path B</strong> and emits an Ultrastealth headful Python script instead — same skill, same command.</p>
+  </section>
+
+  <!-- LIBRARY -->
+  <section id="lib">
+    <h2>Or use it as a library</h2>
     <pre><code>import asyncio
 from ultrastealth import UltrastealthFetcher
 
 async def main():
-    async with UltrastealthFetcher(headless=False) as us:
+    async with UltrastealthFetcher(headless=False) as us:   # headed + Xvfb = stealthiest
         html = await us.fetch_and_evaluate(
             url="https://bot.sannysoft.com/",
             js_expression="() =&gt; document.documentElement.outerHTML",
@@ -76,8 +293,26 @@ asyncio.run(main())</code></pre>
   </section>
 
   <footer>
-    Ultrastealth · for authorized scraping, QA, and anti-bot research · <a href="https://github.com/anusoft/ultrastealth">github.com/anusoft/ultrastealth</a>
+    Ultrastealth · for authorized scraping, QA, and anti-bot research · MIT ·
+    <a href="https://github.com/anusoft/ultrastealth">github.com/anusoft/ultrastealth</a> ·
+    sibling: <a href="https://anusoft.github.io/scrapling-js/">scrapling-js</a>
   </footer>
 </div>
+
+<script>
+  document.querySelectorAll('.tabs').forEach(function (group) {
+    var tabs = group.querySelectorAll('.tab');
+    var panels = group.parentElement.querySelectorAll(':scope > .panel');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        tabs.forEach(function (t) { t.classList.remove('active'); });
+        panels.forEach(function (p) { p.classList.remove('active'); });
+        tab.classList.add('active');
+        var name = tab.getAttribute('data-tab');
+        group.parentElement.querySelector(':scope > .panel[data-panel="' + name + '"]').classList.add('active');
+      });
+    });
+  });
+</script>
 </body>
 </html>
