@@ -54,11 +54,16 @@
   summary { cursor:pointer; font-weight:600; }
   footer { color:var(--mut); text-align:center; padding:40px 0; font-size:.9rem; border-top:1px solid var(--br); margin-top:50px; }
   .kbd { background:#0a0e15; border:1px solid var(--br); border-radius:5px; padding:1px 6px; font-size:.82rem; }
+  .langbar { text-align:right; padding-top:14px; font-size:.9rem; color:var(--mut); }
+  .langbar a, .langbar span { margin-left:10px; }
+  .langbar .cur { color:var(--fg); font-weight:600; }
   @media (max-width:620px){ .pick{grid-template-columns:1fr;} h1{font-size:2.2rem;} }
 </style>
 </head>
 <body>
 <div class="wrap">
+
+  <div class="langbar"><span class="cur">EN</span><a href="th/">ไทย</a></div>
 
   <header>
     <span class="badge">🥷 stealth · 🤖 mcp · 🛠 skill</span>
@@ -249,7 +254,7 @@ Agent ▸ browser_network_enable()            # MCP: stealth browser
 
 # rerun anytime, no LLM:
 bun run scrape_example.js --resume</code></pre>
-    <p class="note">No API and Cloudflare in the way? The agent falls back to <strong>Path B</strong> and emits an Ultrastealth headful Python script instead — same skill, same command.</p>
+    <p class="note">No API and Cloudflare in the way? The agent falls back to <strong>Path B</strong> and emits an Ultrastealth headed Python script instead — same skill, same command. For Cloudflare-Turnstile-gated sites it builds in a persistent browser profile + challenge-solving (and notes that those targets need a residential IP). See the worked example <code>examples/egp-announcements.py</code> in the repo.</p>
   </section>
 
   <!-- LIBRARY -->

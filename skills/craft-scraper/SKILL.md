@@ -47,6 +47,10 @@ total-count field.
 
 - **JSON API, or embedded JSON (`__NEXT_DATA__`, `window.__DATA__`)** → **Path A**.
 - **No usable API; data only in the rendered DOM, or task needs clicks/forms** → **Path B**.
+- **API exists but is gated by Cloudflare Turnstile / a Managed Challenge** (you
+  see `challenges.cloudflare.com`, a `cf_clearance`/`TS…` cookie, or the API
+  returns an error/empty unless a browser-minted token is present) → **Path B**.
+  A plain HTTP client can't mint that token — read `reference/protected-apis.md`.
 
 ### 3. Author from the template
 Copy the matching template and adapt it — don't write from scratch. The
@@ -113,7 +117,11 @@ properties as you adapt them:
 ## Files
 - `templates/scraper.scrapling-js.js` — gold-standard Path A starting point.
 - `templates/scraper.ultrastealth.py` — gold-standard Path B starting point.
+- `examples/egp-announcements.py` — real worked Path B example (a Cloudflare-
+  Turnstile-gated government API; persistent profile, solve-retry, E-code handling).
 - `reference/triage.md` — API-first vs browser decision via MCP network capture.
 - `reference/path-a-scrapling-js.md` — adapt the scrapling-js template.
 - `reference/path-b-ultrastealth.md` — adapt the Ultrastealth template.
+- `reference/protected-apis.md` — Turnstile/WAF-gated APIs: why they're Path B,
+  persistent profile, residential-IP requirement.
 - `reference/verification.md` — `plan.md` contract + how to verify.

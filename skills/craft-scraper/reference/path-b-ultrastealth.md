@@ -44,6 +44,15 @@ Methods you'll use:
   called from `__main__`. Defaults equal the task values.
 - On Linux run under `xvfb-run -a python3 <script>.py`.
 
+## Cloudflare Turnstile / token-gated APIs
+If triage showed the target is behind Cloudflare Turnstile or a Managed Challenge
+(or an API that returns empty/an error code without a browser-minted token), read
+`reference/protected-apis.md` and study `examples/egp-announcements.py` — it shows
+the robust pattern: persistent `user_data_dir`, `solve_cloudflare=True` with a
+wait-for-app retry, header-mapped table extraction, and surfacing the app's error
+code. These targets also need a **residential IP** — Turnstile rejects datacenter
+IPs.
+
 ## Discovery during authoring
 Explore live with the MCP (`browser_navigate`, `browser_get_state`,
 `browser_click`, `browser_type`, `browser_evaluate`, `browser_screenshot`) to
