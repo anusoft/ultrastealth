@@ -1,78 +1,57 @@
-# Path B — Ultrastealth headful script
+# Path B — Ultrastealth headed Python script
 
-Use only when triage found no usable API, or the task requires real interaction
-(form-fill, multi-step flow, clicks). The emitted script uses
-**`UltrastealthFetcher`** (rebrowser-playwright + stealth bypasses,
-`navigator.webdriver:false`). **Never** plain `playwright`/`selenium` — that
-fails bot detection.
+Use only when triage found no usable API, or the task needs real interaction
+(form-fill, clicks, multi-step). Start from `templates/scraper.ultrastealth.py`
+and adapt it. The script drives a real Chrome via `UltrastealthFetcher`
+(rebrowser-playwright + bypasses, `navigator.webdriver:false`) — never plain
+`playwright`/`selenium`.
 
-## Authoring (code-as-action)
+## Use the high-level API — it keeps one page across the whole flow
 
-Author with `python3` heredocs that drive the stealth browser, one multi-step
-script per Bash call (faster than per-action round-trips). Two ways to drive it
-during authoring:
-
-1. **MCP (default, simplest):** explore live with the Ultrastealth MCP
-   (`browser_navigate`, `browser_get_state`, `browser_click`, `browser_type`,
-   `browser_evaluate`, `browser_screenshot`) to find stable selectors, then bake
-   the confirmed flow into the script.
-2. **CDP bridge (optional):** start an Ultrastealth browser with
-   `ULTRASTEALTH_CDP_PORT=9222` and `connect_over_cdp("http://127.0.0.1:9222")`
-   from your heredoc to drive the *same* stealth browser as code. Use only if
-   the MCP path is insufficient.
-
-## Emitted script shape (reusable CLI)
+The most common mistake is reaching into `us._context.new_page()` per page, or
+calling `fetch_and_evaluate` in a loop (each call opens a **new** page, so
+clicking "Next" loses state). Instead pass a single **`page_action`** that does
+the entire multi-step walk on one page — the template shows this:
 
 ```python
-import asyncio
-from ultrastealth import UltrastealthFetcher
+async def walk(page):              # page is already at START_URL
+    box = page.get_by_role("searchbox"); await box.fill(query); await box.press("Enter")
+    for n in range(1, pages + 1):
+        await page.wait_for_selector("[data-product]", timeout=15000)
+        items.extend(await page.evaluate(EXTRACT))     # extract via evaluate
+        if n < pages and await page.get_by_role("link", name="Next").count():
+            await page.get_by_role("link", name="Next").click()
 
-async def scrape_<domain>(arg_a: str, arg_b: int) -> dict:
-    """<one-line summary>.
-
-    Args:
-        arg_a: <meaning>; <format/allowed>. Default: "<value>".
-        arg_b: <meaning>; <range/units>. Default: <value>.
-    Returns:
-        dict with keys <...>.
-    """
-    async with UltrastealthFetcher(headless=False) as us:  # headed + Xvfb = stealthiest
-        page = await us._context.new_page()
-        await page.goto(URL, wait_until="domcontentloaded")
-        # interact via get_by_role / aria-label; prefer interactive form-fill
-        # over deep-link URLs (params silently dropped, locale/A-B variance).
-        # extract via page.evaluate(...) — NOT page.content() (hangs on SPAs).
-        ...
-        return result
-
-if __name__ == "__main__":
-    import argparse
-    p = argparse.ArgumentParser(description=scrape_<domain>.__doc__.splitlines()[0])
-    p.add_argument("--arg-a", dest="arg_a", default="<value>", help="...")
-    p.add_argument("--arg-b", dest="arg_b", type=int, default=<value>, help="...")
-    a = p.parse_args()
-    print(asyncio.run(scrape_<domain>(**vars(a))))
+async with UltrastealthFetcher(headless=False) as us:
+    await us.fetch(url=START_URL, wait_secs=2.0, page_action=walk, solve_cloudflare=True)
 ```
 
-Rules:
-- **Side-effect-free at import** — no browser launch / network / file write at
-  module top level. The reusable function must be importable without a run.
-- Defaults equal the concrete task values, so a no-arg run reproduces the task.
-- Variable values from `plan.md`'s `# Parameters` table → function args + flags.
-- Fixed-for-the-site values (start URL, selectors) stay hard-coded.
-- Use `page.evaluate(...)` for content extraction; never `page.content()`.
-- Never `network_idle=True` waits; never `full_page=True` screenshots.
-- On Linux, run headed mode under `xvfb-run -a` (or with `DISPLAY` set).
+Methods you'll use:
+- `fetch(url, wait_secs, page_action, solve_cloudflare)` → navigates, runs your
+  `page_action(page)` on that page, returns HTML. Best for interactive flows.
+- `fetch_and_evaluate(url, js_expression, page_action, wait_secs, solve_cloudflare)`
+  → same, but returns the result of one final `page.evaluate`. Best for a single
+  page with no pagination.
+- `solve_cloudflare=True` is harmless when there's no challenge — leave it on for
+  protected targets.
 
-## Instrumentation & evidence
+## Rules that keep Path B scripts working
+- **Extract with `page.evaluate(...)`**, never `page.content()` (can hang on SPAs).
+- **Wait for a selector**, never `network_idle=True` (deadlocks the pool).
+- **Interact via roles / ARIA / data attributes** and the site's own controls,
+  not deep-link `?query=`/`&page=` URLs (params get dropped or A/B-varied).
+- **Side-effect-free at import** — the scrape function launches nothing until
+  called from `__main__`. Defaults equal the task values.
+- On Linux run under `xvfb-run -a python3 <script>.py`.
 
-For each Critical Point, save a screenshot (e.g.
-`out/craft/<task_id>/run_<id>/screenshots/cp<N>_<action>.png`) and write a
-`step <n> action: <reason>` line to a run log, with the final datum at the end.
-Read those PNGs to self-verify — see `reference/verification.md`.
+## Discovery during authoring
+Explore live with the MCP (`browser_navigate`, `browser_get_state`,
+`browser_click`, `browser_type`, `browser_evaluate`, `browser_screenshot`) to
+find stable selectors and confirm the flow, then bake the confirmed steps into
+the `page_action`.
 
-## Run
-
-`python3 <script>.py` (no args reproduces the task), then once with an alternate
-`--arg` to prove parameterization. Import-safety smoke test: import the module in
-a fresh process and confirm no browser launches.
+## Evidence for verification
+For each Critical Point, save a screenshot
+(`out/craft/<task_id>/run_<id>/screenshots/cp<N>.png`) inside the `page_action`
+(`await page.screenshot(path=...)`) and read it back to verify. See
+`reference/verification.md`.

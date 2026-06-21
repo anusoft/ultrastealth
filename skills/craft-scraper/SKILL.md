@@ -1,86 +1,119 @@
 ---
 name: craft-scraper
-description: Use when the user wants to scrape a site or automate a web task and wants a REUSABLE script as the artifact (not a one-shot answer). Drives a one-time authoring loop — discover the site's data source via the Ultrastealth MCP, then emit a deterministic script that reruns forever without any LLM. Triggers on "scrape X", "build a scraper for", "make a reusable script that", "download all products from", "automate this web task and save it".
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob, mcp__ultrastealth__browser_navigate, mcp__ultrastealth__browser_evaluate, mcp__ultrastealth__browser_get_html, mcp__ultrastealth__browser_screenshot, mcp__ultrastealth__browser_network_enable, mcp__ultrastealth__browser_network_log, mcp__ultrastealth__browser_network_detail, mcp__ultrastealth__browser_network_response_body, mcp__ultrastealth__browser_network_summary, mcp__ultrastealth__browser_click, mcp__ultrastealth__browser_type, mcp__ultrastealth__browser_get_state
+description: Use when the user wants to scrape a website or automate a web task and wants a REUSABLE script as the artifact (not a one-shot scrape result). Drives a one-time discovery loop with the Ultrastealth MCP, then emits a deterministic, parameterized script that reruns forever with no LLM — a fast scrapling-js (Bun, HTTP) script when the site has a usable JSON API, or an Ultrastealth (Python, headed real-Chrome) script for protected/JS-rendered sites. Triggers on "scrape X", "build a scraper for", "make a reusable script that pulls…", "download all products/listings from", "automate this web task and save it as a script". Prefer this whenever the user wants something they can run again, even if they don't say the word "scraper".
+allowed-tools: Bash, Read, Write, Edit, Grep, Glob, mcp__ultrastealth__browser_navigate, mcp__ultrastealth__browser_evaluate, mcp__ultrastealth__browser_get_html, mcp__ultrastealth__browser_get_state, mcp__ultrastealth__browser_screenshot, mcp__ultrastealth__browser_network_enable, mcp__ultrastealth__browser_network_log, mcp__ultrastealth__browser_network_detail, mcp__ultrastealth__browser_network_response_body, mcp__ultrastealth__browser_network_summary, mcp__ultrastealth__browser_click, mcp__ultrastealth__browser_type, mcp__ultrastealth__browser_scroll
 ---
 
 # Craft-Scraper
 
-Run an LLM-driven authoring loop **once** and emit a **reusable, deterministic
-script** the user can rerun forever **without any LLM**. The browser/agent is
-disposable; the script is the artifact.
+Run an LLM-driven discovery loop **once** and emit a **reusable, deterministic
+script** the user reruns forever **without any LLM**. The browser and the agent
+are disposable; the script is the artifact. Optimize for a script that still
+works next month, with different arguments, run unattended.
 
-Two pillars:
+Two pillars decide everything:
 
-1. **Stealth discovery.** Inspect the target with the **Ultrastealth MCP**
+1. **Discover with stealth.** Inspect the target with the **Ultrastealth MCP**
    (real Chrome, passes bot detection, `navigator.webdriver:false`). Never drive
-   vanilla Playwright/Selenium.
-2. **Right tool for the target.** Most sites expose a JSON API — the fastest,
+   vanilla Playwright/Selenium — it fails bot checks and is project-banned.
+2. **Emit the right kind of script.** Most sites expose a JSON API; the fastest,
    most robust artifact calls it directly with **scrapling-js (Bun)** and uses
-   **no browser at runtime**. Only fall back to a browser script (Ultrastealth
-   headful) when there is no usable API or the task needs real interaction.
+   **no browser at runtime**. Fall back to an **Ultrastealth headed Python**
+   script only when there is no usable API or the task needs real interaction.
 
-> Prerequisite: the **Ultrastealth MCP** must be connected. See
-> https://anusoft.github.io/ultrastealth/#install
-
-## Modes
-
-- **`/craft-scraper <task + url>`** — author a reusable, parameterized script.
-- Also activates from any prompt matching the description above.
+> Prerequisite: the Ultrastealth MCP must be connected — see
+> https://anusoft.github.io/ultrastealth/#install . If MCP tools aren't
+> available, say so and stop; discovery depends on them.
 
 ## The loop
 
-Track each step (a TODO item per step) and work them in order.
+Track each step (a TODO per step) and do them in order. One action per step;
+read the output before the next.
 
 ### 1. Plan
 Write `out/craft/<task_id>/plan.md` with a `# Parameters` table (every value the
-user could vary → becomes a CLI flag whose default is the concrete task value)
-and a `# Critical Points` checklist (every constraint / required datum,
-independently verifiable). See `reference/verification.md`.
+user could vary → a CLI flag whose **default is the concrete task value**, so a
+no-arg run reproduces the task) and a `# Critical Points` checklist (each
+constraint / required datum, independently verifiable). Contract in
+`reference/verification.md`.
 
-### 2. Triage — find the data source
-Use the MCP to decide Path A vs Path B per `reference/triage.md`:
-`browser_network_enable` → `browser_navigate` → `browser_network_log`
-(xhr/fetch) → inspect promising endpoints with `browser_network_detail` /
-`browser_network_response_body`. Capture any required headers/cookies/tokens.
+### 2. Triage — find the data source (the highest-leverage step)
+Follow `reference/triage.md`: `browser_network_enable` → `browser_navigate` →
+trigger the data (scroll/click/type) → `browser_network_log(filter_type="xhr")`
+→ inspect candidates with `browser_network_detail` /
+`browser_network_response_body`. Capture the endpoint, method, params, the
+minimal headers/cookies/tokens it needs, the pagination mechanism, and the
+total-count field.
 
-- **JSON API found (or usable embedded JSON like `__NEXT_DATA__`)** → **Path A**.
-- **SPA with no usable API, or the task requires interaction** → **Path B**.
+- **JSON API, or embedded JSON (`__NEXT_DATA__`, `window.__DATA__`)** → **Path A**.
+- **No usable API; data only in the rendered DOM, or task needs clicks/forms** → **Path B**.
 
-### 3. Author the script
-- **Path A** → `reference/path-a-scrapling-js.md`: a Bun scrapling-js script, no
-  runtime browser.
-- **Path B** → `reference/path-b-ultrastealth.md`: an Ultrastealth headful
-  Python script.
+### 3. Author from the template
+Copy the matching template and adapt it — don't write from scratch. The
+templates already encode the quality bar (retries, pagination, resume,
+import-safety, polite pacing).
+
+- **Path A** → start from `templates/scraper.scrapling-js.js`; details in
+  `reference/path-a-scrapling-js.md`.
+- **Path B** → start from `templates/scraper.ultrastealth.py`; details in
+  `reference/path-b-ultrastealth.md`.
 
 ### 4. Execute
-Run the emitted script once and capture stdout/stderr.
+Run the script once with defaults (reproduces the task), then once with an
+altered argument to prove parameterization. For Path A, also run with `--resume`
+to prove it skips finished work.
 
 ### 5. Self-verify
-Walk every Critical Point per `reference/verification.md` (read PNGs for Path B,
-assert on emitted JSON/row counts for Path A). Diagnose → fix → re-run on any
-failure.
+Walk every Critical Point per `reference/verification.md` — assert on the emitted
+JSON/row counts (Path A) or read the saved screenshots (Path B). Be harsh on
+empty or suspiciously short results. Diagnose → fix → re-run on any failure.
 
 ### 6. Deliver
 Only when every CP is evidenced. Propose the destination path, **confirm it with
 the user**, write the script there, then show the user `--help` and the final
-datum/row count.
+datum/row count so they know how to rerun it.
+
+## The quality bar (what makes a generated script "good")
+
+A script that scrapes once in the chat is not the deliverable. Every emitted
+script must clear this bar — the templates already do, so preserve these
+properties as you adapt them:
+
+- **Reproducible by default.** No args → reproduces the exact task. Each varying
+  value is a flag whose default is the task's concrete value.
+- **Side-effect-free at import.** All work lives in a function called only under
+  `import.meta.main` (JS) / `if __name__ == "__main__"` (Py). Importing the file
+  must not fetch, launch a browser, or write files.
+- **Fails loud, not silent.** Check HTTP status; raise on non-2xx and on
+  non-JSON-when-JSON-expected. A wrong selector or expired token should error,
+  not silently write zero rows.
+- **Knows when to stop.** Use the total-count field to bound pagination; treat an
+  empty page as a stop signal too. Never loop forever.
+- **Resumable for big jobs.** When it writes many files, support `--resume` to
+  skip ones already on disk.
+- **Polite.** A small delay between requests; rely on scrapling-js's built-in
+  retries/backoff rather than hammering.
+- **Honest output.** Print progress (page, running total), one sample row, and a
+  final summary (rows, files, elapsed). The user should be able to trust the run
+  from stdout alone.
+- **Robust selectors/fields.** Prefer stable hooks (data attributes, API field
+  names, ARIA roles) over brittle nth-child chains and layout classes.
 
 ## Hard rules
 
 - **Never install or drive Playwright/Selenium directly.** scrapling-js for HTTP
   (Path A), `UltrastealthFetcher` for browser (Path B).
-- **Always use Bun** to run JS/TS (`bun run ...`), never npm/node/yarn.
-- Use **`python3`** for Python.
-- One action per step; observe output before the next.
-- Prefer the discovered API over scraping rendered HTML. Prefer interactive
-  form-filling over brittle deep-link URLs when a browser path must parameterize
-  a search.
-- The reusable script must be **side-effect-free at import** and support
-  `--help` (and `--resume` where it downloads many files).
+- **Always use Bun** to run JS/TS (`bun run …`), never npm/node/yarn.
+- Use **`python3`** for Python. On Linux, Path B headed mode runs under
+  `xvfb-run -a`.
+- Prefer the discovered API over scraping rendered HTML. Prefer the site's own
+  controls (form-fill, Next button) over brittle deep-link `?query=`/`&page=`
+  URLs.
 
-## Reference files
+## Files
+- `templates/scraper.scrapling-js.js` — gold-standard Path A starting point.
+- `templates/scraper.ultrastealth.py` — gold-standard Path B starting point.
 - `reference/triage.md` — API-first vs browser decision via MCP network capture.
-- `reference/path-a-scrapling-js.md` — emit a Bun scrapling-js scraper.
-- `reference/path-b-ultrastealth.md` — emit an Ultrastealth headful script.
-- `reference/verification.md` — `plan.md` contract + verification.
+- `reference/path-a-scrapling-js.md` — adapt the scrapling-js template.
+- `reference/path-b-ultrastealth.md` — adapt the Ultrastealth template.
+- `reference/verification.md` — `plan.md` contract + how to verify.

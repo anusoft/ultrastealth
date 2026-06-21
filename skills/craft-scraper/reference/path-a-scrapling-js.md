@@ -1,85 +1,59 @@
 # Path A — scrapling-js (Bun) scraper
 
-Preferred path. The emitted script hits the discovered JSON API (or parses
-embedded JSON) directly with **no browser at runtime**.
+Preferred path. The emitted script calls the discovered JSON API (or parses
+embedded JSON) directly with **no browser at runtime**. Start from
+`templates/scraper.scrapling-js.js` and adapt it — it already encodes the quality
+bar; you mostly fill in the captured endpoint and the response shape.
 
 ## Setup
-
 ```bash
 bun add scrapling-js
 ```
-
 Docs: https://anusoft.github.io/scrapling-js/
 
-## Required conventions
+## What to change in the template
+1. **Config block** — `API_BASE`, `ENDPOINT`, `REFERER`, `PAGE_SIZE`, and the
+   minimal `HEADERS` you captured in triage.
+2. **Total + items fields** — set `total = data.total ?? …` and
+   `items = data.items ?? …` to the *actual* JSON paths from
+   `browser_network_response_body`. These two lines are the most common cause of
+   a zero-row run; verify them against a real response.
+3. **Params → flags** — every value from `plan.md`'s Parameters table becomes a
+   flag with the task's concrete value as default (the template shows the argv
+   pattern).
+4. **Pagination** — page-based is in the template; for offset/cursor, adjust the
+   loop and the stop condition accordingly.
 
-- **Runtime:** Bun only (`bun run <script>.js`). Never npm/node/yarn.
-- **HTTP client:** scrapling-js `Fetcher` only:
-  ```js
-  import { Fetcher } from "scrapling-js";
-  ```
-  Never `fetch`/`axios`/`node-fetch`.
-- **HTML parsing:** Bun's `HTMLRewriter` (for embedded JSON / light HTML), or the
-  scrapling-js `Selector` API for CSS/XPath. Avoid jsdom/DOMParser.
-- **Output:** informative, not verbose (count + 1–2 sample rows per section,
-  page progress, final summary). Write data files under `out/` (or a
-  task-appropriate dir).
+## Key `Fetcher` facts
+- `Fetcher.get(url, { params, headers, stealthyHeaders: true, timeout, retries, retryDelay })`
+  — `stealthyHeaders` defaults true; `retries` (3) and `retryDelay` (1000ms) are
+  built in, so don't hand-roll retry loops.
+- `Fetcher.post(url, { json: {...} })` for JSON bodies; `{ data: {...} }` for
+  form-encoded.
+- The `Response` has `.ok`, `.status`, `.body` (string), `.headers`, `.cookies`,
+  and the selector API (`.css(...)`, `.xpath(...)`). There is **no `.json()`** —
+  use `JSON.parse(r.body)`.
 
-## `Fetcher` surface
-
+## Selectors (only when you must parse HTML, not an API)
 ```js
-// GET with stealthy headers + query params
-const r = await Fetcher.get(`${API_BASE}/path`, {
-  params: { page: "1", store: "1000" },
-  headers: { accept: "application/json", referer: "https://site/" },
-  stealthyHeaders: true,                       // on by default
-});
-if (!r.ok) { console.error(`HTTP ${r.status}`); process.exit(1); }
-const data = JSON.parse(r.body);
-
-// POST JSON
-const p = await Fetcher.post(`${API_BASE}/path`, {
-  headers: { accept: "application/json", "content-type": "application/json",
-             referer: "https://site/" },
-  json: { ... },
-});
-
-// CSS / XPath selectors when you must parse HTML
-const page = await Fetcher.get("https://site/list");
+const page = await Fetcher.get(url);
 const titles = page.css("h3.title::text").getAll();
 const hrefs  = page.css("a.card::attr(href)").getAll();
 ```
 
-Embedded JSON (SPA with no API but data in the page):
+## Embedded JSON (SPA with data baked into the page)
 ```js
-let content = "";
+let buf = "";
 await new HTMLRewriter()
-  .on("script#__NEXT_DATA__", { text(c) { content += c.text; } })
+  .on("script#__NEXT_DATA__", { text(c) { buf += c.text; } })
   .transform(new Response(html)).text();
-const data = JSON.parse(content);
+const data = JSON.parse(buf);
 ```
-
-> Note: Bun's `HTMLRewriter` does NOT decode HTML entities in attributes —
+> Bun's `HTMLRewriter` does NOT decode HTML entities in attributes —
 > `getAttribute("href")` returns literal `&amp;`. Decode before regex-matching.
 
-## Script structure (required)
-
-1. **Config block** — `API_BASE`, `OUT_DIR`, file paths, captured headers.
-2. **CLI** — parse `process.argv`; support `--resume` (skip already-downloaded
-   files) and `--help` (usage). Variable parameters from `plan.md` become flags
-   with the concrete task values as defaults.
-3. **Discovery** — fetch the category/index dynamically (don't hardcode the
-   tree) when the target paginates by category.
-4. **Download loop** — walk categories / paginate until empty; save JSON per
-   page; print progress.
-5. **Summary** — totals, files written, disk usage, elapsed time.
-
-Keep the script **side-effect-free at import** — wrap work in `run()`/`main()`
-and call it at the bottom.
-
 ## Verify
-
-Run it (`bun run <script>.js`, and once with `--resume`), then assert against the
-Critical Points: expected row/section counts (vs the API total-count field),
-required fields present in saved JSON, params reflected in results, and `--resume`
-skipping existing files. See `reference/verification.md`.
+Run `bun run <script>.js`, then once with `--resume`. Assert row/section counts
+against the API's total-count field, confirm required fields are present in the
+saved JSON, and that `--resume` skips existing files. See
+`reference/verification.md`.
