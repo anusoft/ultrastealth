@@ -1,7 +1,7 @@
 # Ultrastealth
 
-Ultrastealth is a standalone Python package for maximum-stealth browser automation. 
-It utilizes `rebrowser-playwright` (with CDP leak fixes), headed Xvfb modes, and several advanced JS bypasses to avoid bot detection systems.
+Ultrastealth is a standalone Python package for maximum-stealth browser automation.
+It uses `rebrowser-playwright` (with CDP leak fixes), real Google Chrome, the user's default Chrome profile, headed Xvfb modes on Linux, and several advanced JS bypasses to avoid bot detection systems.
 
 ## Prerequisites
 - **Python 3.12+**
@@ -29,7 +29,8 @@ import asyncio
 from ultrastealth import UltrastealthFetcher
 
 async def fetch_example():
-    # headless=False runs a headed browser (more stealthy, usually combined with Xvfb)
+    # headless=False runs headed. On macOS this uses native headful Chrome;
+    # on Linux it uses Xvfb when a display is not already available.
     async with UltrastealthFetcher(headless=False) as us:
         # fetch_and_evaluate avoids issues with default Playwright page.content() on SPAs
         title = await us.fetch_and_evaluate(
@@ -65,6 +66,24 @@ as a table. Notes: `pixelscan`/`incolumitas` only return a verdict from a reside
 IP; `cloudflare` (nowsecure.nl) needs the bundled Turnstile solver. The default
 fingerprint is intentionally the consistent real-Chrome one — set
 `ULTRASTEALTH_BYPASSES=on` to additionally layer the (optional) JS spoofs.
+
+## Browser Runner Defaults
+
+The default runner is `chrome+default-profile`: Ultrastealth launches real Google Chrome with the OS default Chrome user-data directory and `--profile-directory=Default`. On macOS this is:
+
+```text
+~/Library/Application Support/Google/Chrome
+```
+
+This gives MCP tools access to the same cookies and logged-in state as the normal Chrome default profile. Override it when needed:
+
+```bash
+ULTRASTEALTH_RUNNER=chrome+temp-profile ultrastealth-mcp --transport stdio
+ULTRASTEALTH_PROFILE_DIRECTORY="Profile 1" ultrastealth-mcp --transport stdio
+ULTRASTEALTH_USER_DATA_DIR=/path/to/chrome-user-data ultrastealth-mcp --transport stdio
+```
+
+If Chrome is already running with the same profile, Chrome may refuse a second automation process. Close that Chrome instance or point `ULTRASTEALTH_USER_DATA_DIR` at a separate profile root.
 
 ## MCP Server for Claude Code
 

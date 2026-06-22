@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ultrastealth — stealth browser automation + MCP for AI agents</title>
-<meta name="description" content="Maximum-stealth browser automation in Python with an MCP server and a script-authoring skill. Real Chrome under Xvfb, rebrowser-playwright CDP-leak fixes, undetectable JS bypasses. One-line MCP install for Claude Code, Codex, OpenCode and Cursor.">
+<meta name="description" content="Maximum-stealth browser automation in Python with an MCP server and a script-authoring skill. Real Chrome with the default Chrome profile, headful macOS and Xvfb Linux modes, rebrowser-playwright CDP-leak fixes, and undetectable JS bypasses.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A5%B7%3C/text%3E%3C/svg%3E">
 <style>
   :root { --bg:#0b0f17; --card:#131a26; --card2:#0f1622; --fg:#e6edf3; --mut:#9aa7b8; --acc:#5eead4; --acc2:#818cf8; --br:#243044; --ok:#34d399; --warn:#f59e0b; }
@@ -68,7 +68,7 @@
   <header>
     <span class="badge">🥷 stealth · 🤖 mcp · 🛠 skill</span>
     <h1>Ultrastealth<span class="dot">.</span></h1>
-    <p class="tag">Maximum-stealth browser automation in Python — plus an <strong>MCP server</strong> and a <strong>script-authoring skill</strong> that let your AI agent scrape even <em>highly protected</em> sites. Real Chrome under Xvfb, <code>rebrowser-playwright</code> CDP-leak fixes, undetectable OS-consistent JS bypasses.</p>
+    <p class="tag">Maximum-stealth browser automation in Python — plus an <strong>MCP server</strong> and a <strong>script-authoring skill</strong> that let your AI agent scrape even <em>highly protected</em> sites. Real Chrome with the default profile, native headful macOS mode, Xvfb on Linux, <code>rebrowser-playwright</code> CDP-leak fixes, and undetectable OS-consistent JS bypasses.</p>
     <div class="cta">
       <a class="btn primary" href="#install">Install the MCP</a>
       <a class="btn ghost" href="https://github.com/anusoft/ultrastealth">View on GitHub</a>
@@ -82,7 +82,7 @@
     <div class="pick">
       <div class="card us">
         <h3>🥷 Ultrastealth <span class="note">— this project</span></h3>
-        <p>Headed real-Chrome automation that passes bot detection.</p>
+        <p>Headed real-Chrome automation with a persistent default-profile runner.</p>
         <div class="when">Use it for</div>
         <ul>
           <li>Highly protected sites (Cloudflare, Imperva, DataDome)</li>
@@ -110,7 +110,7 @@
     <div class="grid">
       <div class="card"><h3>Driver-level patch</h3><p>Renames <code>rebrowser-playwright</code>'s leaked <code>__pwInitScripts</code> / <code>UtilityScript</code> identifiers at the driver source. Lifts the rebrowser bot score <strong>6/10 → 8/10</strong>.</p></div>
       <div class="card"><h3>Isolated-world evaluate</h3><p><code>REBROWSER_PATCHES_RUNTIME_FIX_MODE=alwaysIsolated</code> runs <code>page.evaluate</code> off the main world → <strong>0 positive detections</strong> on rebrowser's probe.</p></div>
-      <div class="card"><h3>Headed, not headless</h3><p>Launches real Chrome under Xvfb with a curated flag set — no headless tells, automation flags stripped, <code>navigator.webdriver:false</code>.</p></div>
+      <div class="card"><h3>Headed, not headless</h3><p>Launches real Chrome headfully on macOS and under Xvfb on Linux with a curated flag set — no headless tells, automation flags stripped, <code>navigator.webdriver:false</code>.</p></div>
       <div class="card"><h3>Undetectable bypasses</h3><p>Optional WebGL/canvas/audio/font spoofs use Proxy native-masking (<code>toString</code>/<code>name</code> read native) and stay OS-consistent. Opt in with <code>ULTRASTEALTH_BYPASSES=on</code>.</p></div>
       <div class="card"><h3>WebRTC leak closed</h3><p>Camoufox-ported <code>webrtc_spoof.js</code> drops real-IP ICE candidates so a proxy isn't betrayed by a WebRTC IP leak.</p></div>
       <div class="card"><h3>Network DevTools for agents</h3><p>The MCP exposes Chrome-DevTools-style capture (<code>browser_network_log</code>/<code>_detail</code>/<code>_response_body</code>) — perfect for discovering JSON APIs.</p></div>
@@ -129,7 +129,7 @@ pipx install --include-deps git+https://github.com/anusoft/ultrastealth.git
 # Install the Chromium build rebrowser drives, then patch the driver's CDP leaks
 rebrowser_playwright install chromium   # note: underscore — that's the pipx-exposed name
 ultrastealth-patch            # re-run after any `pipx upgrade ultrastealth`</code></pre>
-    <p class="note">Linux headed mode needs an X server — <code>sudo apt install xvfb</code> and run your agent under <code>xvfb-run -a</code> (or set <code>DISPLAY</code>). Prefer not to use <code>pipx</code>? See the <a href="#clone">clone install</a> below.</p>
+    <p class="note">By default Ultrastealth runs <code>chrome+default-profile</code>: real Google Chrome with your OS Chrome user-data root and <code>--profile-directory=Default</code>. On macOS this is native headful Chrome; on Linux headed mode needs an X server — <code>sudo apt install xvfb</code> and run your agent under <code>xvfb-run -a</code> (or set <code>DISPLAY</code>). If Chrome is already open with the same profile, close it first or set <code>ULTRASTEALTH_RUNNER=chrome+temp-profile</code> / <code>ULTRASTEALTH_USER_DATA_DIR=/path/to/profile</code>. Prefer not to use <code>pipx</code>? See the <a href="#clone">clone install</a> below.</p>
 
     <h4>Then wire it into your tool</h4>
     <div class="tabs" role="tablist">
@@ -264,7 +264,7 @@ bun run scrape_example.js --resume</code></pre>
 from ultrastealth import UltrastealthFetcher
 
 async def main():
-    async with UltrastealthFetcher(headless=False) as us:   # headed + Xvfb = stealthiest
+    async with UltrastealthFetcher(headless=False) as us:   # macOS headful; Linux uses Xvfb
         html = await us.fetch_and_evaluate(
             url="https://bot.sannysoft.com/",
             js_expression="() =&gt; document.documentElement.outerHTML",

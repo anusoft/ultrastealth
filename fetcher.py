@@ -22,6 +22,7 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -39,11 +40,17 @@ XVFB_DISPLAY = os.environ.get("ULTRASTEALTH_DISPLAY", ":99")
 
 # Chrome executable paths (prefer real Chrome over "for Testing")
 CHROME_PATHS = [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium-browser",
     "/usr/bin/chromium",
 ]
+
+DEFAULT_RUNNER = "chrome+default-profile"
+DEFAULT_PROFILE_DIRECTORY = "Default"
 
 
 def _find_chrome() -> Optional[str]:
@@ -59,8 +66,62 @@ def _find_chrome() -> Optional[str]:
     return None
 
 
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _is_linux() -> bool:
+    return sys.platform.startswith("linux")
+
+
+def _normalize_runner(runner: Optional[str]) -> str:
+    value = runner or os.environ.get("ULTRASTEALTH_RUNNER") or DEFAULT_RUNNER
+    return value.strip().lower().replace("_", "-").replace(" ", "-")
+
+
+def _runner_uses_default_profile(runner: str) -> bool:
+    return runner in {
+        "chrome",
+        "chrome+default",
+        "chrome+default-profile",
+        "chrome:default-profile",
+        "chrome-default-profile",
+    }
+
+
+def _default_chrome_user_data_dir() -> Optional[str]:
+    """Return the OS default Google Chrome user-data root."""
+    override = os.environ.get("ULTRASTEALTH_USER_DATA_DIR")
+    if override:
+        return os.path.expanduser(override)
+
+    if _is_macos():
+        return str(Path.home() / "Library/Application Support/Google/Chrome")
+    if _is_linux():
+        return str(Path.home() / ".config/google-chrome")
+    if sys.platform.startswith("win"):
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return str(Path(local_app_data) / "Google/Chrome/User Data")
+    return None
+
+
+def _should_run_headless(headless: bool) -> bool:
+    """Choose Playwright's headless flag for the current platform."""
+    if headless:
+        return True
+    if _is_macos():
+        # macOS uses WindowServer instead of DISPLAY, so absence of DISPLAY does
+        # not mean headed Chrome is unavailable.
+        return False
+    return not os.environ.get("DISPLAY")
+
+
 def _ensure_xvfb() -> Optional[subprocess.Popen]:
     """Start Xvfb if not already running and DISPLAY is not set."""
+    if not _is_linux():
+        return None
+
     display = os.environ.get("DISPLAY", "")
     if display and display != XVFB_DISPLAY:
         # Real display available (e.g., desktop environment)
@@ -253,12 +314,22 @@ class UltrastealthFetcher:
         timeout: int = 30000,
         user_data_dir: Optional[str] = None,
         executable_path: Optional[str] = None,
+        runner: Optional[str] = None,
+        profile_directory: Optional[str] = None,
     ):
         self.headless = headless
         self.proxy = proxy
         self.timeout = timeout
+        self.runner = _normalize_runner(runner)
+        self.profile_directory = (
+            profile_directory
+            or os.environ.get("ULTRASTEALTH_PROFILE_DIRECTORY")
+            or DEFAULT_PROFILE_DIRECTORY
+        )
         self.user_data_dir = user_data_dir
         self.executable_path = executable_path or _find_chrome()
+        self.uses_default_chrome_profile = False
+        self.owns_user_data_dir = False
         self._playwright = None
         self._browser = None
         self._context = None
@@ -276,7 +347,7 @@ class UltrastealthFetcher:
     async def start(self):
         """Launch browser with maximum stealth configuration."""
         # Start Xvfb if needed (for headed mode without a display)
-        if not self.headless:
+        if not self.headless and _is_linux():
             self._xvfb_proc = _ensure_xvfb()
 
         # Warn if the rebrowser driver fingerprint patch isn't applied. The patch
@@ -309,7 +380,7 @@ class UltrastealthFetcher:
         self._playwright = await async_playwright().start()
 
         # Prepare launch args
-        use_headless = self.headless or (not os.environ.get("DISPLAY"))
+        use_headless = _should_run_headless(self.headless)
 
         # Opt-in CDP endpoint: set ULTRASTEALTH_CDP_PORT to expose a remote
         # debugging port so an external Playwright client (e.g. the
@@ -321,6 +392,26 @@ class UltrastealthFetcher:
             stealth_flags.append("--remote-debugging-address=127.0.0.1")
             stealth_flags.append(f"--remote-debugging-port={_cdp_port}")
             log.info(f"CDP debugging endpoint enabled on 127.0.0.1:{_cdp_port}")
+
+        # Create/select the user-data directory before launch args are finalized.
+        # The default runner uses the user's regular Chrome profile root and
+        # selects the "Default" profile directory inside it.
+        if not self.user_data_dir:
+            default_profile_root = (
+                _default_chrome_user_data_dir()
+                if _runner_uses_default_profile(self.runner)
+                else None
+            )
+            if default_profile_root:
+                self.user_data_dir = default_profile_root
+                self.uses_default_chrome_profile = True
+            else:
+                self._temp_dir = tempfile.mkdtemp(prefix="ultrastealth_")
+                self.user_data_dir = self._temp_dir
+                self.owns_user_data_dir = True
+
+        if self.uses_default_chrome_profile and self.profile_directory:
+            stealth_flags.append(f"--profile-directory={self.profile_directory}")
 
         launch_args = {
             "args": stealth_flags,
@@ -334,11 +425,6 @@ class UltrastealthFetcher:
         else:
             launch_args["channel"] = "chrome"
             log.info("Using bundled Chromium (no system Chrome found)")
-
-        # Create temp user data dir if not provided
-        if not self.user_data_dir:
-            self._temp_dir = tempfile.mkdtemp(prefix="ultrastealth_")
-            self.user_data_dir = self._temp_dir
 
         # Launch persistent context (more realistic than incognito)
         context_opts: dict[str, Any] = {
@@ -357,6 +443,13 @@ class UltrastealthFetcher:
 
         if self.proxy:
             context_opts["proxy"] = self.proxy
+
+        if self.uses_default_chrome_profile:
+            log.info(
+                "Using Chrome default profile: %s (profile directory: %s)",
+                self.user_data_dir,
+                self.profile_directory,
+            )
 
         self._context = await self._playwright.chromium.launch_persistent_context(
             self.user_data_dir,
