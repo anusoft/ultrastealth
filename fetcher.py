@@ -316,11 +316,13 @@ class UltrastealthFetcher:
         executable_path: Optional[str] = None,
         runner: Optional[str] = None,
         profile_directory: Optional[str] = None,
+        fallback_to_temp_profile: bool = True,
     ):
         self.headless = headless
         self.proxy = proxy
         self.timeout = timeout
         self.runner = _normalize_runner(runner)
+        self.fallback_to_temp_profile = fallback_to_temp_profile
         self.profile_directory = (
             profile_directory
             or os.environ.get("ULTRASTEALTH_PROFILE_DIRECTORY")
@@ -410,8 +412,10 @@ class UltrastealthFetcher:
                 self.user_data_dir = self._temp_dir
                 self.owns_user_data_dir = True
 
-        if self.uses_default_chrome_profile and self.profile_directory:
-            stealth_flags.append(f"--profile-directory={self.profile_directory}")
+        profile_directory_arg = None
+        if self.profile_directory and not self.owns_user_data_dir:
+            profile_directory_arg = f"--profile-directory={self.profile_directory}"
+            stealth_flags.append(profile_directory_arg)
 
         launch_args = {
             "args": stealth_flags,
@@ -451,11 +455,46 @@ class UltrastealthFetcher:
                 self.profile_directory,
             )
 
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            self.user_data_dir,
-            **launch_args,
-            **context_opts,
-        )
+        try:
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                self.user_data_dir,
+                **launch_args,
+                **context_opts,
+            )
+        except Exception as exc:
+            if not self.uses_default_chrome_profile or not self.fallback_to_temp_profile:
+                raise
+
+            log.warning(
+                "Chrome default profile failed to launch; retrying with a temporary "
+                "profile. Close Chrome or set ULTRASTEALTH_RUNNER=chrome+temp-profile "
+                "to avoid this fallback. Error: %s",
+                exc,
+            )
+            self._temp_dir = tempfile.mkdtemp(prefix="ultrastealth_")
+            self.user_data_dir = self._temp_dir
+            self.owns_user_data_dir = True
+            self.uses_default_chrome_profile = False
+
+            fallback_launch_args = dict(launch_args)
+            fallback_args = list(launch_args["args"])
+            if profile_directory_arg:
+                fallback_args = [arg for arg in fallback_args if arg != profile_directory_arg]
+            fallback_launch_args["args"] = fallback_args
+
+            try:
+                self._context = await self._playwright.chromium.launch_persistent_context(
+                    self.user_data_dir,
+                    **fallback_launch_args,
+                    **context_opts,
+                )
+            except Exception:
+                if self._temp_dir and os.path.exists(self._temp_dir):
+                    shutil.rmtree(self._temp_dir, ignore_errors=True)
+                self._temp_dir = None
+                self.user_data_dir = None
+                self.owns_user_data_dir = False
+                raise
 
         # Inject stealth scripts into all new pages
         await self._context.add_init_script(self._bypass_scripts)

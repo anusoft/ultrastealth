@@ -83,7 +83,22 @@ ULTRASTEALTH_PROFILE_DIRECTORY="Profile 1" ultrastealth-mcp --transport stdio
 ULTRASTEALTH_USER_DATA_DIR=/path/to/chrome-user-data ultrastealth-mcp --transport stdio
 ```
 
-If Chrome is already running with the same profile, Chrome may refuse a second automation process. Close that Chrome instance or point `ULTRASTEALTH_USER_DATA_DIR` at a separate profile root.
+On Linux the default profile root is:
+
+```text
+~/.config/google-chrome
+```
+
+If Chrome is already running with the same profile, Chrome may refuse a second automation process. Ultrastealth retries once with a temporary profile so MCP calls can still open the requested page in one shot. If you need logged-in cookies instead of the automatic temporary fallback, close that Chrome instance or point `ULTRASTEALTH_USER_DATA_DIR` at a separate profile root.
+
+MCP calls can request a specific Chrome profile for one-shot navigation:
+
+```text
+browser_navigate({"url": "https://mail.google.com", "profile_directory": "Profile 1"})
+browser_restart({"navigate_to": "https://mail.google.com", "profile_directory": "Profile 1"})
+```
+
+You can also pass `user_data_dir` and `runner` on those MCP calls. Explicit profile requests do not silently fall back to a temporary profile; if Chrome has locked that user-data directory, close Chrome or choose a separate `user_data_dir`.
 
 ## MCP Server for Claude Code
 

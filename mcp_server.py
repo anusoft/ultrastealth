@@ -66,6 +66,7 @@ mcp = FastMCP(
 # Global browser state
 _fetcher: UltrastealthFetcher | None = None
 _page = None  # Current active page
+_browser_config: tuple[str | None, str | None, str | None] = (None, None, None)
 _session_start: float | None = None
 _request_count: int = 0
 _active_tab_id: str | None = None  # Track which tab is active
@@ -85,6 +86,32 @@ def _next_request():
     return _request_count
 
 
+def _profile_config(
+    runner: str | None = None,
+    user_data_dir: str | None = None,
+    profile_directory: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    return (runner, user_data_dir, profile_directory)
+
+
+def _profile_requested(config: tuple[str | None, str | None, str | None]) -> bool:
+    return any(value is not None for value in config)
+
+
+def _fetcher_kwargs(config: tuple[str | None, str | None, str | None]) -> dict:
+    runner, user_data_dir, profile_directory = config
+    kwargs = {"headless": False}
+    if runner is not None:
+        kwargs["runner"] = runner
+    if user_data_dir is not None:
+        kwargs["user_data_dir"] = user_data_dir
+    if profile_directory is not None:
+        kwargs["profile_directory"] = profile_directory
+    if _profile_requested(config):
+        kwargs["fallback_to_temp_profile"] = False
+    return kwargs
+
+
 def _hard_kill_browser():
     """SIGKILL the wedged Chrome process tree and reset browser state.
 
@@ -94,7 +121,7 @@ def _hard_kill_browser():
     The old playwright driver object is abandoned (cheap, GC'd); we do NOT await
     its async stop(), which can itself hang on a dead pipe.
     """
-    global _fetcher, _page, _active_tab_id, _network_handlers
+    global _fetcher, _page, _active_tab_id, _network_handlers, _browser_config
     udd = None
     try:
         if _fetcher is not None:
@@ -114,6 +141,7 @@ def _hard_kill_browser():
     _page = None
     _active_tab_id = None
     _network_handlers = {}
+    _browser_config = (None, None, None)
 
 
 # Hard ceiling on any single tool call. A wedged browser (e.g. a spinning GPU
@@ -148,16 +176,32 @@ def _tool(timeout: float = DEFAULT_TOOL_TIMEOUT):
     return decorator
 
 
-async def _ensure_browser():
+async def _ensure_browser(
+    runner: str | None = None,
+    user_data_dir: str | None = None,
+    profile_directory: str | None = None,
+):
     """Lazily start the browser on first tool call."""
-    global _fetcher, _page, _session_start, _request_count, _active_tab_id, _browser_wedged
+    global _fetcher, _page, _browser_config, _session_start, _request_count, _active_tab_id, _browser_wedged
+    requested_config = _profile_config(runner, user_data_dir, profile_directory)
     if _browser_wedged:
         log.warning("Browser flagged wedged; hard-killing before restart")
         _hard_kill_browser()
         _browser_wedged = False
+    if (
+        _fetcher is not None
+        and _profile_requested(requested_config)
+        and requested_config != _browser_config
+    ):
+        log.info("Restarting Ultrastealth browser with requested Chrome profile...")
+        _network_handlers.clear()
+        await _fetcher.close()
+        _fetcher = None
+        _page = None
+        _active_tab_id = None
     if _fetcher is None:
         log.info("Starting Ultrastealth browser...")
-        _fetcher = UltrastealthFetcher(headless=False)
+        _fetcher = UltrastealthFetcher(**_fetcher_kwargs(requested_config))
         await _fetcher.start()
         # Close the default about:blank page that persistent context creates
         default_pages = _fetcher._context.pages
@@ -171,16 +215,25 @@ async def _ensure_browser():
         _session_start = time.time()
         _request_count = 0
         _active_tab_id = _page_id(_page)
+        _browser_config = requested_config
         if _network_enabled:
             _attach_network_listeners(_page)
         log.info("Browser ready.")
     return _fetcher, _page
 
 
-async def _get_page():
+async def _get_page(
+    runner: str | None = None,
+    user_data_dir: str | None = None,
+    profile_directory: str | None = None,
+):
     """Get the current page, starting browser if needed."""
     global _page, _active_tab_id
-    _, page = await _ensure_browser()
+    _, page = await _ensure_browser(
+        runner=runner,
+        user_data_dir=user_data_dir,
+        profile_directory=profile_directory,
+    )
     if page.is_closed():
         _page = await _fetcher._context.new_page()
         _active_tab_id = _page_id(_page)
@@ -345,9 +398,18 @@ async def _resolve_selector(page, index: int | None = None, selector: str | None
 # ─── MCP Tools ──────────────────────────────────────────────────────
 
 @_tool()
-async def browser_navigate(url: str) -> str:
-    """Navigate to a URL. Returns page title and URL after navigation."""
-    page = await _get_page()
+async def browser_navigate(
+    url: str,
+    profile_directory: str | None = None,
+    user_data_dir: str | None = None,
+    runner: str | None = None,
+) -> str:
+    """Navigate to a URL. Optionally launch/restart with a specific Chrome profile."""
+    page = await _get_page(
+        runner=runner,
+        user_data_dir=user_data_dir,
+        profile_directory=profile_directory,
+    )
     _next_request()
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -938,7 +1000,7 @@ async def browser_network_summary() -> str:
 @_tool()
 async def browser_close() -> str:
     """Close the browser completely. A new browser will start on next tool call."""
-    global _fetcher, _page, _session_start, _request_count, _active_tab_id
+    global _fetcher, _page, _browser_config, _session_start, _request_count, _active_tab_id
     if _fetcher:
         _network_handlers.clear()
         await _fetcher.close()
@@ -947,6 +1009,7 @@ async def browser_close() -> str:
         _session_start = None
         _request_count = 0
         _active_tab_id = None
+        _browser_config = (None, None, None)
         return "Browser closed."
     return "No browser was running."
 
@@ -1297,10 +1360,14 @@ async def browser_cleanup(
 
 
 @_tool()
-async def browser_restart(navigate_to: str | None = None) -> str:
-    """Restart the browser to reclaim all memory. Optionally navigate to a URL after restart.
-    Use this when memory is high and closing tabs isn't enough."""
-    global _fetcher, _page, _session_start, _request_count, _active_tab_id
+async def browser_restart(
+    navigate_to: str | None = None,
+    profile_directory: str | None = None,
+    user_data_dir: str | None = None,
+    runner: str | None = None,
+) -> str:
+    """Restart browser. Optionally navigate URL and use a specific Chrome profile."""
+    global _fetcher, _page, _browser_config, _session_start, _request_count, _active_tab_id
 
     _next_request()
     old_url = None
@@ -1313,12 +1380,14 @@ async def browser_restart(navigate_to: str | None = None) -> str:
         _fetcher = None
         _page = None
 
-    _fetcher = UltrastealthFetcher(headless=False)
+    requested_config = _profile_config(runner, user_data_dir, profile_directory)
+    _fetcher = UltrastealthFetcher(**_fetcher_kwargs(requested_config))
     await _fetcher.start()
     _page = await _fetcher._context.new_page()
     _session_start = time.time()
     _request_count = 0
     _active_tab_id = _page_id(_page)
+    _browser_config = requested_config
     if _network_enabled:
         _attach_network_listeners(_page)
 
