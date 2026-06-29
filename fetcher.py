@@ -16,6 +16,8 @@ Usage:
 """
 
 import asyncio
+import contextlib
+import io
 import logging
 import os
 import random
@@ -37,16 +39,21 @@ BYPASSES_DIR = Path(__file__).parent / "bypasses"
 
 # Xvfb display number
 XVFB_DISPLAY = os.environ.get("ULTRASTEALTH_DISPLAY", ":99")
+FALLBACK_SCREEN_SIZE = (1440, 900)
+MIN_WINDOW_SIZE = (800, 600)
+WINDOW_MARGIN = (80, 160)
 
-# Chrome executable paths (prefer real Chrome over "for Testing")
+# Chrome/Chromium executable paths. Prefer real Google Chrome for stronger
+# navigator.userAgentData brand parity; keep Chromium as an explicit fallback.
 CHROME_PATHS = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
     "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/google-chrome",
-    "/usr/bin/chromium-browser",
     "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
 ]
 
 DEFAULT_RUNNER = "chrome+default-profile"
@@ -54,12 +61,12 @@ DEFAULT_PROFILE_DIRECTORY = "Default"
 
 
 def _find_chrome() -> Optional[str]:
-    """Find a real Chrome/Chromium binary on the system."""
+    """Find a Chrome/Chromium binary on the system."""
     for path in CHROME_PATHS:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
     # Fall back to shutil.which
-    for name in ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium"]:
+    for name in ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"]:
         found = shutil.which(name)
         if found:
             return found
@@ -74,27 +81,19 @@ def _is_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
-def _normalize_runner(runner: Optional[str]) -> str:
-    value = runner or os.environ.get("ULTRASTEALTH_RUNNER") or DEFAULT_RUNNER
-    return value.strip().lower().replace("_", "-").replace(" ", "-")
+def _default_chromium_user_data_dir() -> Optional[str]:
+    if _is_macos():
+        return str(Path.home() / "Library/Application Support/Chromium")
+    if _is_linux():
+        return str(Path.home() / ".config/chromium")
+    if sys.platform.startswith("win"):
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return str(Path(local_app_data) / "Chromium/User Data")
+    return None
 
 
-def _runner_uses_default_profile(runner: str) -> bool:
-    return runner in {
-        "chrome",
-        "chrome+default",
-        "chrome+default-profile",
-        "chrome:default-profile",
-        "chrome-default-profile",
-    }
-
-
-def _default_chrome_user_data_dir() -> Optional[str]:
-    """Return the OS default Google Chrome user-data root."""
-    override = os.environ.get("ULTRASTEALTH_USER_DATA_DIR")
-    if override:
-        return os.path.expanduser(override)
-
+def _default_google_chrome_user_data_dir() -> Optional[str]:
     if _is_macos():
         return str(Path.home() / "Library/Application Support/Google/Chrome")
     if _is_linux():
@@ -106,6 +105,53 @@ def _default_chrome_user_data_dir() -> Optional[str]:
     return None
 
 
+def _same_path(left: str, right: str) -> bool:
+    return os.path.normcase(os.path.normpath(os.path.expanduser(left))) == os.path.normcase(
+        os.path.normpath(os.path.expanduser(right))
+    )
+
+
+def _normalize_chromium_user_data_dir(user_data_dir: Optional[str]) -> Optional[str]:
+    if user_data_dir is None:
+        return None
+    return os.path.expanduser(user_data_dir)
+
+
+def _normalize_runner(runner: Optional[str]) -> str:
+    value = runner or DEFAULT_RUNNER
+    return value.strip().lower().replace("_", "-").replace(" ", "-")
+
+
+def _runner_uses_default_profile(runner: str) -> bool:
+    return runner in {
+        "chrome",
+        "chrome+default",
+        "chrome+default-profile",
+        "chrome:default-profile",
+        "chrome-default-profile",
+        "chromium",
+        "chromium+default",
+        "chromium+default-profile",
+        "chromium:default-profile",
+        "chromium-default-profile",
+    }
+
+
+def _default_chrome_user_data_dir() -> Optional[str]:
+    """Return the OS default user-data root for the selected runner."""
+    override = os.environ.get("ULTRASTEALTH_USER_DATA_DIR")
+    if override:
+        return _normalize_chromium_user_data_dir(override)
+
+    return _default_google_chrome_user_data_dir()
+
+
+def _default_user_data_dir_for_runner(runner: str) -> Optional[str]:
+    if runner.startswith("chromium"):
+        return _default_chromium_user_data_dir()
+    return _default_google_chrome_user_data_dir()
+
+
 def _should_run_headless(headless: bool) -> bool:
     """Choose Playwright's headless flag for the current platform."""
     if headless:
@@ -115,6 +161,105 @@ def _should_run_headless(headless: bool) -> bool:
         # not mean headed Chrome is unavailable.
         return False
     return not os.environ.get("DISPLAY")
+
+
+def _parse_size(value: str) -> Optional[tuple[int, int]]:
+    match = re.search(r"(\d+)\s*[x,]\s*(\d+)", value)
+    if not match:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _host_screen_size() -> Optional[tuple[int, int]]:
+    override = os.environ.get("ULTRASTEALTH_SCREEN_SIZE")
+    if override:
+        return _parse_size(override)
+
+    if _is_macos():
+        try:
+            result = subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "Finder" to get bounds of window of desktop',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode == 0:
+                parts = [int(part.strip()) for part in result.stdout.split(",") if part.strip()]
+                if len(parts) == 4:
+                    width = parts[2] - parts[0]
+                    height = parts[3] - parts[1]
+                    if width > 0 and height > 0:
+                        return width, height
+        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+            return None
+
+    if _is_linux():
+        command = ["xdpyinfo"]
+        display = os.environ.get("DISPLAY")
+        if display:
+            command.extend(["-display", display])
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                match = re.search(r"dimensions:\s*(\d+)x(\d+)\s+pixels", result.stdout)
+                if match:
+                    return int(match.group(1)), int(match.group(2))
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+
+    return None
+
+
+def _fit_window_size(screen_size: tuple[int, int]) -> tuple[int, int]:
+    screen_width, screen_height = screen_size
+    margin_width, margin_height = WINDOW_MARGIN
+    min_width, min_height = MIN_WINDOW_SIZE
+    width = min(max(min_width, screen_width - margin_width), screen_width)
+    height = min(max(min_height, screen_height - margin_height), screen_height)
+    return width, height
+
+
+def _browser_window_dimensions() -> tuple[tuple[int, int], tuple[int, int]]:
+    screen_size = _host_screen_size() or FALLBACK_SCREEN_SIZE
+    return screen_size, _fit_window_size(screen_size)
+
+
+def _load_patch_rebrowser():
+    try:
+        from . import patch_rebrowser
+    except ImportError:
+        import patch_rebrowser
+    return patch_rebrowser
+
+
+def _ensure_rebrowser_patched() -> bool:
+    try:
+        patcher = _load_patch_rebrowser()
+        if patcher.is_patched():
+            return True
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            rc = patcher.run("apply")
+        if rc == 0 and patcher.is_patched():
+            log.info("Applied rebrowser driver fingerprint patch")
+            return True
+
+        log.warning(
+            "rebrowser driver fingerprint patch could not be applied; "
+            "__pwInitScripts / UtilityScript leaks may remain detectable. %s",
+            output.getvalue().strip(),
+        )
+    except Exception:
+        log.debug("Could not verify/apply rebrowser driver fingerprint patch", exc_info=True)
+    return False
 
 
 def _ensure_xvfb() -> Optional[subprocess.Popen]:
@@ -156,6 +301,47 @@ def _ensure_xvfb() -> Optional[subprocess.Popen]:
     time.sleep(0.3)
     log.info(f"Started Xvfb on {XVFB_DISPLAY}")
     return proc
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _chrome_singleton_pid(user_data_dir: str) -> Optional[int]:
+    lock_path = Path(user_data_dir) / "SingletonLock"
+    if not os.path.lexists(lock_path):
+        return None
+    try:
+        target = os.readlink(lock_path)
+    except OSError:
+        return None
+    try:
+        return int(target.rsplit("-", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def _cleanup_stale_chrome_singletons(user_data_dir: str) -> bool:
+    pid = _chrome_singleton_pid(user_data_dir)
+    if pid is None or _pid_exists(pid):
+        return False
+
+    removed = False
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        path = Path(user_data_dir) / name
+        if os.path.lexists(path):
+            try:
+                path.unlink()
+                removed = True
+            except OSError:
+                log.warning("Could not remove stale browser singleton: %s", path)
+    return removed
 
 
 def _load_bypass_scripts() -> str:
@@ -230,9 +416,7 @@ STEALTH_FLAGS = [
     "--lang=en-US",
     "--mute-audio",
     "--disable-sync",
-    "--hide-scrollbars",
     "--disable-logging",
-    "--start-maximized",
     "--enable-async-dns",
     "--accept-lang=en-US",
     "--use-mock-keychain",
@@ -246,6 +430,7 @@ STEALTH_FLAGS = [
     "--disable-cloud-import",
     "--disable-print-preview",
     "--disable-dev-shm-usage",
+    "--disable-component-update",
     "--metrics-recording-only",
     "--disable-crash-reporter",
     "--disable-partial-raster",
@@ -261,6 +446,7 @@ STEALTH_FLAGS = [
     "--disable-threaded-scrolling",
     "--enable-simple-cache-backend",
     "--disable-background-networking",
+    "--disable-desktop-notifications",
     "--enable-surface-synchronization",
     "--disable-image-animation-resync",
     "--disable-renderer-backgrounding",
@@ -274,10 +460,31 @@ STEALTH_FLAGS = [
     "--disable-client-side-phishing-detection",
     "--disable-backgrounding-occluded-windows",
     "--disable-layer-tree-host-memory-pressure",
+    "--no-first-run",
+    "--no-service-autorun",
+    "--no-default-browser-check",
+    "--no-pings",
+    "--noerrdialogs",
+    "--disable-default-apps",
+    "--disable-datasaver-prompt",
+    "--disable-external-intent-requests",
+    "--disable-focus-on-load",
+    "--disable-infobars",
+    "--disable-search-engine-choice-screen",
+    "--disable-window-activation",
+    "--allow-pre-commit-input",
+    "--hide-crash-restore-bubble",
+    "--install-autogenerated-theme=0,0,0",
+    "--silent-debugger-extension-api",
+    "--simulate-outdated-no-au=Tue, 31 Dec 2099 23:59:59 GMT",
+    "--suppress-message-center-popups",
+    "--unsafely-disable-devtools-self-xss-warnings",
     "--autoplay-policy=user-gesture-required",
     "--disable-offer-store-unmasked-wallet-cards",
     "--disable-blink-features=AutomationControlled",
     "--disable-component-extensions-with-background-pages",
+    "--disable-extensions-http-throttling",
+    "--extensions-on-chrome-urls",
     "--enable-features=NetworkService,NetworkServiceInProcess",
     "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
     "--disable-features=AudioServiceOutOfProcess,TranslateUI,BlinkGenPropertyTrees",
@@ -302,7 +509,7 @@ class UltrastealthFetcher:
     Combines:
     - rebrowser-playwright (fixes Runtime.Enable CDP leak)
     - Xvfb headed mode (eliminates headless detection)
-    - Real Chrome binary (not "Chrome for Testing")
+        - Real Chrome/Chromium binary
     - Enhanced JS bypasses (worker consistency, canvas/WebGL/audio noise, hardware profile)
     - Consistent device fingerprint profile
     """
@@ -321,14 +528,30 @@ class UltrastealthFetcher:
         self.headless = headless
         self.proxy = proxy
         self.timeout = timeout
-        self.runner = _normalize_runner(runner)
+        raw_env_user_data_dir = os.environ.get("ULTRASTEALTH_USER_DATA_DIR")
+        env_user_data_dir = _normalize_chromium_user_data_dir(raw_env_user_data_dir)
+        env_profile_directory = os.environ.get("ULTRASTEALTH_PROFILE_DIRECTORY")
+        raw_env_runner = os.environ.get("ULTRASTEALTH_RUNNER")
+        env_runner = raw_env_runner
+        self.runner = _normalize_runner(runner or env_runner)
+        self.explicit_chrome_profile_requested = any(
+            value is not None
+            for value in (
+                user_data_dir,
+                profile_directory,
+                runner,
+                env_user_data_dir,
+                env_profile_directory,
+                env_runner,
+            )
+        )
         self.fallback_to_temp_profile = fallback_to_temp_profile
         self.profile_directory = (
             profile_directory
-            or os.environ.get("ULTRASTEALTH_PROFILE_DIRECTORY")
+            or env_profile_directory
             or DEFAULT_PROFILE_DIRECTORY
         )
-        self.user_data_dir = user_data_dir
+        self.user_data_dir = _normalize_chromium_user_data_dir(user_data_dir) or env_user_data_dir
         self.executable_path = executable_path or _find_chrome()
         self.uses_default_chrome_profile = False
         self.owns_user_data_dir = False
@@ -348,25 +571,11 @@ class UltrastealthFetcher:
 
     async def start(self):
         """Launch browser with maximum stealth configuration."""
+        _ensure_rebrowser_patched()
+
         # Start Xvfb if needed (for headed mode without a display)
         if not self.headless and _is_linux():
             self._xvfb_proc = _ensure_xvfb()
-
-        # Warn if the rebrowser driver fingerprint patch isn't applied. The patch
-        # (rename __pwInitScripts / UtilityScript) is reverted by any
-        # `pip install -U rebrowser-playwright`, so re-run it after upgrades:
-        #     python -m ultrastealth.patch_rebrowser
-        try:
-            from .patch_rebrowser import is_patched
-
-            if not is_patched():
-                log.warning(
-                    "rebrowser driver is NOT fingerprint-patched "
-                    "(run: python -m ultrastealth.patch_rebrowser) — "
-                    "__pwInitScripts / UtilityScript leaks are detectable."
-                )
-        except Exception:
-            pass
 
         # Run page.evaluate in an ISOLATED world by default (maximum stealth):
         # this defeats main-world execution detection (e.g. rebrowser's
@@ -395,12 +604,17 @@ class UltrastealthFetcher:
             stealth_flags.append(f"--remote-debugging-port={_cdp_port}")
             log.info(f"CDP debugging endpoint enabled on 127.0.0.1:{_cdp_port}")
 
+        screen_size, window_size = _browser_window_dimensions()
+        screen_width, screen_height = screen_size
+        window_width, window_height = window_size
+        stealth_flags.append(f"--window-size={window_width},{window_height}")
+
         # Create/select the user-data directory before launch args are finalized.
-        # The default runner uses the user's regular Chrome profile root and
+        # The default runner uses the user's regular browser profile root and
         # selects the "Default" profile directory inside it.
         if not self.user_data_dir:
             default_profile_root = (
-                _default_chrome_user_data_dir()
+                _default_user_data_dir_for_runner(self.runner)
                 if _runner_uses_default_profile(self.runner)
                 else None
             )
@@ -417,6 +631,13 @@ class UltrastealthFetcher:
             profile_directory_arg = f"--profile-directory={self.profile_directory}"
             stealth_flags.append(profile_directory_arg)
 
+        if self.user_data_dir and not self.owns_user_data_dir:
+            if _cleanup_stale_chrome_singletons(self.user_data_dir):
+                log.warning(
+                    "Removed stale browser singleton files from %s before launch",
+                    self.user_data_dir,
+                )
+
         launch_args = {
             "args": stealth_flags,
             "ignore_default_args": HARMFUL_FLAGS,
@@ -425,10 +646,9 @@ class UltrastealthFetcher:
 
         if self.executable_path:
             launch_args["executable_path"] = self.executable_path
-            log.info(f"Using Chrome: {self.executable_path}")
+            log.info(f"Using Chrome/Chromium: {self.executable_path}")
         else:
-            launch_args["channel"] = "chrome"
-            log.info("Using bundled Chromium (no system Chrome found)")
+            log.info("Using bundled Chromium (no system Chrome/Chromium found)")
 
         # Launch persistent context (more realistic than incognito)
         context_opts: dict[str, Any] = {
@@ -438,8 +658,8 @@ class UltrastealthFetcher:
             "has_touch": False,
             "service_workers": "allow",
             "ignore_https_errors": True,
-            "screen": {"width": 1920, "height": 1080},
-            "viewport": {"width": 1920, "height": 1080},
+            "screen": {"width": screen_width, "height": screen_height},
+            "viewport": {"width": window_width, "height": window_height},
             "permissions": ["geolocation", "notifications"],
             "locale": "en-US",
             "timezone_id": "America/New_York",
@@ -450,7 +670,7 @@ class UltrastealthFetcher:
 
         if self.uses_default_chrome_profile:
             log.info(
-                "Using Chrome default profile: %s (profile directory: %s)",
+                "Using browser default profile: %s (profile directory: %s)",
                 self.user_data_dir,
                 self.profile_directory,
             )
@@ -462,12 +682,22 @@ class UltrastealthFetcher:
                 **context_opts,
             )
         except Exception as exc:
-            if not self.uses_default_chrome_profile or not self.fallback_to_temp_profile:
-                raise
+            if (
+                not self.uses_default_chrome_profile
+                or not self.fallback_to_temp_profile
+                or self.explicit_chrome_profile_requested
+            ):
+                raise RuntimeError(
+                    "Could not launch requested browser profile "
+                    f"{self.profile_directory!r} from user data dir "
+                    f"{self.user_data_dir!r}. Close all Chrome/Chromium windows "
+                    "using that user-data dir, then restart the MCP server. "
+                    f"Original error: {exc}"
+                ) from exc
 
             log.warning(
-                "Chrome default profile failed to launch; retrying with a temporary "
-                "profile. Close Chrome or set ULTRASTEALTH_RUNNER=chrome+temp-profile "
+                "Default browser profile failed to launch; retrying with a temporary "
+                "profile. Close Chrome/Chromium or set ULTRASTEALTH_RUNNER=chrome+temp-profile "
                 "to avoid this fallback. Error: %s",
                 exc,
             )

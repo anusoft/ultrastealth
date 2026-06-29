@@ -29,6 +29,7 @@ Repository = "https://github.com/anusoft/ultrastealth"
 
 [project.scripts]
 ultrastealth-mcp = "ultrastealth.mcp_server:main"
+ultrastealth-install = "ultrastealth.install:main"
 ultrastealth-patch = "ultrastealth.patch_rebrowser:main"
 
 # The published repo keeps the package modules at the repository root, so map the

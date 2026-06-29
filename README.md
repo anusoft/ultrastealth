@@ -1,23 +1,33 @@
 # Ultrastealth
 
 Ultrastealth is a standalone Python package for maximum-stealth browser automation.
-It uses `rebrowser-playwright` (with CDP leak fixes), real Google Chrome, the user's default Chrome profile, headed Xvfb modes on Linux, and several advanced JS bypasses to avoid bot detection systems.
+It uses `rebrowser-playwright` (with CDP leak fixes), real Google Chrome by default, Chromium fallback, headed Xvfb modes on Linux, and several advanced JS bypasses to avoid bot detection systems.
 
 ## Prerequisites
 - **Python 3.12+**
-- Chromium or Google Chrome installed.
+- Google Chrome installed for best brand parity, or Chromium/Playwright's bundled Chromium fallback.
 
 ## Installation
 
-It is recommended to use a virtual environment.
+From a repo clone, installation is one command:
 
 ```bash
-# Create and activate a virtual environment
-python3 -m venv venv
-source venv/bin/activate
+./install.sh
+```
 
-# Install dependencies inside the virtual environment
-pip install -r ultrastealth/requirements.txt
+This installs the package in editable mode, installs rebrowser-playwright's
+Chromium fallback build, and applies the driver fingerprint patch. To select a specific
+Python interpreter:
+
+```bash
+PYTHON=/path/to/python3 ./install.sh
+```
+
+If the package is already installed, rerun the same browser install + patch step
+directly:
+
+```bash
+ultrastealth-install
 ```
 
 ## Basic Usage
@@ -29,7 +39,7 @@ import asyncio
 from ultrastealth import UltrastealthFetcher
 
 async def fetch_example():
-    # headless=False runs headed. On macOS this uses native headful Chrome;
+    # headless=False runs headed. On macOS this prefers native headful Google Chrome;
     # on Linux it uses Xvfb when a display is not already available.
     async with UltrastealthFetcher(headless=False) as us:
         # fetch_and_evaluate avoids issues with default Playwright page.content() on SPAs
@@ -69,7 +79,7 @@ fingerprint is intentionally the consistent real-Chrome one — set
 
 ## Browser Runner Defaults
 
-The default runner is `chrome+default-profile`: Ultrastealth launches real Google Chrome with the OS default Chrome user-data directory and `--profile-directory=Default`. On macOS this is:
+The default runner is `chrome+default-profile`: Ultrastealth launches Google Chrome with the OS default Chrome user-data directory and `--profile-directory=Default`. On macOS this is:
 
 ```text
 ~/Library/Application Support/Google/Chrome
@@ -81,6 +91,8 @@ This gives MCP tools access to the same cookies and logged-in state as the norma
 ULTRASTEALTH_RUNNER=chrome+temp-profile ultrastealth-mcp --transport stdio
 ULTRASTEALTH_PROFILE_DIRECTORY="Profile 1" ultrastealth-mcp --transport stdio
 ULTRASTEALTH_USER_DATA_DIR=/path/to/chrome-user-data ultrastealth-mcp --transport stdio
+ultrastealth-mcp --transport stdio --runner chrome+default-profile --user-data-dir "/path/to/chrome-user-data" --profile-directory "Profile 1"
+ultrastealth-mcp --transport stdio --runner chromium+default-profile --user-data-dir "/path/to/chromium-user-data" --profile-directory "Profile 1"
 ```
 
 On Linux the default profile root is:
@@ -89,7 +101,7 @@ On Linux the default profile root is:
 ~/.config/google-chrome
 ```
 
-If Chrome is already running with the same profile, Chrome may refuse a second automation process. Ultrastealth retries once with a temporary profile so MCP calls can still open the requested page in one shot. If you need logged-in cookies instead of the automatic temporary fallback, close that Chrome instance or point `ULTRASTEALTH_USER_DATA_DIR` at a separate profile root.
+If Chrome is already running with the same user-data directory and no profile was explicitly requested, Ultrastealth retries once with a temporary profile so MCP calls can still open the requested page in one shot. If you set `ULTRASTEALTH_PROFILE_DIRECTORY`, `ULTRASTEALTH_USER_DATA_DIR`, or pass profile arguments to an MCP tool, Ultrastealth treats that as an explicit profile request and will not silently fall back to a temporary profile. Close Chrome first if you need automation control of that exact logged-in profile.
 
 MCP calls can request a specific Chrome profile for one-shot navigation:
 
@@ -108,11 +120,13 @@ The server runs as an HTTP service (streamable-http transport) on port **8090** 
 
 ### Available Tools
 
-**Browser automation:** `browser_navigate`, `browser_click`, `browser_type`, `browser_get_state`, `browser_screenshot`, `browser_scroll`, `browser_go_back`, `browser_evaluate`, `browser_press_key`, `browser_get_html`, `browser_wait`, `browser_hover`, `browser_select_option`, `browser_close`
+**Browser automation:** `browser_navigate`, `browser_click`, `browser_type`, `browser_get_state`, `browser_screenshot`, `browser_scroll`, `browser_go_back`, `browser_evaluate`, `browser_press_key`, `browser_get_html`, `browser_get`, `browser_is`, `browser_wait`, `browser_hover`, `browser_focus`, `browser_scroll_into_view`, `browser_select_option`, `browser_add_init_script`, `browser_add_script`, `browser_add_style`, `browser_close`
 
 **Tab management:** `browser_new_tab`, `browser_list_tabs`, `browser_switch_tab`, `browser_close_tab`
 
-**Network monitoring (Chrome DevTools-style):** `browser_network_enable`, `browser_network_disable`, `browser_network_log`, `browser_network_detail`, `browser_network_response_body`, `browser_network_clear`, `browser_network_summary`
+**Network monitoring (DevTools-style):** `browser_network_enable`, `browser_network_disable`, `browser_network_log`, `browser_network_detail`, `browser_network_response_body`, `browser_network_clear`, `browser_network_summary`
+
+**Session, storage, and diagnostics:** `browser_cookies`, `browser_storage`, `browser_state_save`, `browser_state_load`, `browser_console_list`, `browser_console_clear`, `browser_errors_list`, `browser_errors_clear`
 
 **Resource management:** `browser_status`, `browser_cleanup`, `browser_restart`
 
@@ -216,16 +230,17 @@ The `ultrastealth/bypasses` folder includes injected scripts to spoof webgl, moc
 lifts the rebrowser bot-detector score from **6/10 → 8/10**.
 
 ```bash
-python -m ultrastealth.patch_rebrowser            # apply
-python -m ultrastealth.patch_rebrowser --check     # report status
-python -m ultrastealth.patch_rebrowser --revert    # undo
+ultrastealth-install --skip-browser-install        # apply after dependency upgrades
+ultrastealth-patch --check                         # report status
+ultrastealth-patch --revert                        # undo
 ```
 
 The patch edits the *installed* pip package, so **a `pip install -U rebrowser-playwright`
-reverts it — re-run the patcher afterward.** It is idempotent, revertible, and
+reverts it — re-run `ultrastealth-install --skip-browser-install` afterward.**
+It is idempotent, revertible, and
 upstream-safe: each edit anchors on the original token and *warns + skips* (never
-corrupts) if upstream changed it. `UltrastealthFetcher.start()` logs a warning if the
-patch isn't applied.
+corrupts) if upstream changed it. `UltrastealthFetcher.start()` also attempts to
+apply the patch before launching Chrome/Chromium and logs a warning if it cannot.
 
 ### Maximum stealth: isolated evaluate (opt-in tradeoff)
 
@@ -240,6 +255,6 @@ export REBROWSER_PATCHES_RUNTIME_FIX_MODE=alwaysIsolated
 runs `evaluate` in an **isolated world** → **0 positive detections** on rebrowser.
 Trade-off: isolated `evaluate` can read the shared **DOM** (`querySelector`,
 `outerHTML`, embedded JSON like `__NEXT_DATA__` via `textContent`) but **not**
-main-world JS globals (`window.someAppState`). Left off by default to avoid
-silently breaking scrapers/MCP calls that read main-world JS. Enable it when you
-don't need main-world JS access and want the cleanest fingerprint.
+main-world JS globals (`window.someAppState`). Ultrastealth sets this mode by
+default before launch; set `REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding` if you
+need main-world JS access.

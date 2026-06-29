@@ -9,7 +9,7 @@ Tools modeled after browser-use MCP:
   browser_screenshot, browser_scroll, browser_go_back, browser_evaluate,
   browser_press_key, browser_get_html, browser_wait, browser_close
 
-Network monitoring (like Chrome DevTools Network tab):
+Network monitoring (like a DevTools Network tab):
 - browser_network_enable, browser_network_disable, browser_network_log,
   browser_network_detail, browser_network_response_body, browser_network_clear,
   browser_network_summary
@@ -22,12 +22,14 @@ Usage:
 
 import asyncio
 import base64
+import contextlib
 import functools
 import inspect
 import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -78,6 +80,12 @@ _network_enabled: bool = False  # Whether network capture is active
 _network_max_entries: int = 1000  # Cap to prevent memory bloat
 _network_handlers: dict = {}  # page -> (request_handler, response_handler) for cleanup
 
+# Browser diagnostics state
+_diagnostic_handlers: dict = {}  # page -> (console_handler, pageerror_handler)
+_console_log: list[dict] = []
+_page_errors: list[dict] = []
+_diagnostic_max_entries: int = 500
+
 
 def _next_request():
     """Increment and return request count."""
@@ -86,12 +94,70 @@ def _next_request():
     return _request_count
 
 
+def _env_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    return value or None
+
+
+def _default_chromium_user_data_dir() -> str | None:
+    if sys.platform == "darwin":
+        return str(Path.home() / "Library/Application Support/Chromium")
+    if sys.platform.startswith("linux"):
+        return str(Path.home() / ".config/chromium")
+    return None
+
+
+def _default_google_chrome_user_data_dir() -> str | None:
+    if sys.platform == "darwin":
+        return str(Path.home() / "Library/Application Support/Google/Chrome")
+    if sys.platform.startswith("linux"):
+        return str(Path.home() / ".config/google-chrome")
+    if sys.platform.startswith("win"):
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return str(Path(local_app_data) / "Google/Chrome/User Data")
+    return None
+
+
+def _same_path(left: str, right: str) -> bool:
+    return os.path.normcase(os.path.normpath(os.path.expanduser(left))) == os.path.normcase(
+        os.path.normpath(os.path.expanduser(right))
+    )
+
+
+def _normalize_chromium_user_data_dir(user_data_dir: str | None) -> str | None:
+    if user_data_dir is None:
+        return None
+    return os.path.expanduser(user_data_dir)
+
+
+def _normalize_runner(runner: str | None) -> str | None:
+    if runner is None:
+        return None
+    return runner.strip().lower().replace("_", "-").replace(" ", "-")
+
+
 def _profile_config(
     runner: str | None = None,
     user_data_dir: str | None = None,
     profile_directory: str | None = None,
 ) -> tuple[str | None, str | None, str | None]:
-    return (runner, user_data_dir, profile_directory)
+    env_user_data_dir = _env_value("ULTRASTEALTH_USER_DATA_DIR")
+    effective_user_data_dir = _normalize_chromium_user_data_dir(
+        user_data_dir if user_data_dir is not None else env_user_data_dir
+    )
+    effective_profile_directory = (
+        profile_directory
+        if profile_directory is not None
+        else _env_value("ULTRASTEALTH_PROFILE_DIRECTORY")
+    )
+    env_runner = _env_value("ULTRASTEALTH_RUNNER")
+    effective_runner = _normalize_runner(runner if runner is not None else env_runner)
+    return (
+        effective_runner,
+        effective_user_data_dir,
+        effective_profile_directory,
+    )
 
 
 def _profile_requested(config: tuple[str | None, str | None, str | None]) -> bool:
@@ -113,15 +179,15 @@ def _fetcher_kwargs(config: tuple[str | None, str | None, str | None]) -> dict:
 
 
 def _hard_kill_browser():
-    """SIGKILL the wedged Chrome process tree and reset browser state.
+    """SIGKILL the wedged Chromium process tree and reset browser state.
 
     Used for crash recovery: never awaits the (possibly hung) CDP connection —
-    it kills every chrome process bound to this fetcher's user-data-dir via psutil,
+    it kills every Chromium process bound to this fetcher's user-data-dir via psutil,
     then nulls the globals so the next _ensure_browser() starts a clean browser.
     The old playwright driver object is abandoned (cheap, GC'd); we do NOT await
     its async stop(), which can itself hang on a dead pipe.
     """
-    global _fetcher, _page, _active_tab_id, _network_handlers, _browser_config
+    global _fetcher, _page, _active_tab_id, _network_handlers, _diagnostic_handlers, _browser_config
     udd = None
     try:
         if _fetcher is not None:
@@ -141,6 +207,7 @@ def _hard_kill_browser():
     _page = None
     _active_tab_id = None
     _network_handlers = {}
+    _diagnostic_handlers = {}
     _browser_config = (None, None, None)
 
 
@@ -193,8 +260,12 @@ async def _ensure_browser(
         and _profile_requested(requested_config)
         and requested_config != _browser_config
     ):
-        log.info("Restarting Ultrastealth browser with requested Chrome profile...")
+        log.info("Restarting Ultrastealth browser with requested Chrome/Chromium profile...")
+        if _fetcher._context:
+            for page in list(_fetcher._context.pages):
+                _detach_page_diagnostics(page)
         _network_handlers.clear()
+        _diagnostic_handlers.clear()
         await _fetcher.close()
         _fetcher = None
         _page = None
@@ -216,6 +287,7 @@ async def _ensure_browser(
         _request_count = 0
         _active_tab_id = _page_id(_page)
         _browser_config = requested_config
+        _attach_page_diagnostics(_page)
         if _network_enabled:
             _attach_network_listeners(_page)
         log.info("Browser ready.")
@@ -237,6 +309,7 @@ async def _get_page(
     if page.is_closed():
         _page = await _fetcher._context.new_page()
         _active_tab_id = _page_id(_page)
+        _attach_page_diagnostics(_page)
         if _network_enabled:
             _attach_network_listeners(_page)
         page = _page
@@ -269,7 +342,7 @@ def _get_browser_pid() -> int | None:
                         return proc.pid
     except Exception:
         pass
-    # Fallback: find chrome process by user_data_dir in cmdline
+    # Fallback: find Chromium process by user_data_dir in cmdline
     if _fetcher and _fetcher.user_data_dir:
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
             try:
@@ -310,6 +383,114 @@ def _dir_size(path: str) -> int:
     except (OSError, PermissionError):
         pass
     return total
+
+
+def _trim_entries(entries: list[dict], limit: int = _diagnostic_max_entries) -> None:
+    overflow = len(entries) - limit
+    if overflow > 0:
+        del entries[:overflow]
+
+
+def _event_value(obj, name: str, default=None):
+    value = getattr(obj, name, default)
+    if callable(value):
+        try:
+            return value()
+        except TypeError:
+            return default
+    return value
+
+
+def _attach_page_diagnostics(page) -> None:
+    """Attach console and page-error capture to a page once."""
+    page_key = id(page)
+    if page_key in _diagnostic_handlers or not hasattr(page, "on"):
+        return
+
+    def on_console(msg):
+        location = _event_value(msg, "location", {}) or {}
+        _console_log.append(
+            {
+                "id": len(_console_log),
+                "tab_id": _page_id(page),
+                "type": _event_value(msg, "type", "log"),
+                "text": _event_value(msg, "text", ""),
+                "url": location.get("url") if isinstance(location, dict) else "",
+                "line": location.get("lineNumber") if isinstance(location, dict) else None,
+                "column": location.get("columnNumber") if isinstance(location, dict) else None,
+                "timestamp": time.time(),
+            }
+        )
+        _trim_entries(_console_log)
+
+    def on_pageerror(exc):
+        _page_errors.append(
+            {
+                "id": len(_page_errors),
+                "tab_id": _page_id(page),
+                "message": str(exc),
+                "url": getattr(page, "url", ""),
+                "timestamp": time.time(),
+            }
+        )
+        _trim_entries(_page_errors)
+
+    page.on("console", on_console)
+    page.on("pageerror", on_pageerror)
+    _diagnostic_handlers[page_key] = (on_console, on_pageerror)
+
+
+def _detach_page_diagnostics(page) -> None:
+    page_key = id(page)
+    handlers = _diagnostic_handlers.pop(page_key, None)
+    if not handlers or not hasattr(page, "remove_listener"):
+        return
+    console_handler, error_handler = handlers
+    with contextlib.suppress(Exception):
+        page.remove_listener("console", console_handler)
+    with contextlib.suppress(Exception):
+        page.remove_listener("pageerror", error_handler)
+
+
+def _safe_branch_name() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        branch = result.stdout.strip()
+    except Exception:
+        branch = ""
+    if not branch:
+        branch = Path.cwd().name
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in branch).strip("-")
+    return cleaned or "browser"
+
+
+def _browser_artifact_root() -> Path:
+    branch = _safe_branch_name()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = Path("/cmux-assets")
+    try:
+        root = base / branch / "browser" / stamp
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+    except OSError:
+        root = Path.cwd() / "cmux-assets" / branch / "browser" / stamp
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+
+def _resolve_artifact_path(path: str | None, default_name: str) -> Path:
+    if not path or path == "auto":
+        output = _browser_artifact_root() / default_name
+    else:
+        output = Path(path).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    return output
 
 
 def _build_element_tree(node, elements, depth=0):
@@ -404,7 +585,7 @@ async def browser_navigate(
     user_data_dir: str | None = None,
     runner: str | None = None,
 ) -> str:
-    """Navigate to a URL. Optionally launch/restart with a specific Chrome profile."""
+    """Navigate to a URL. Optionally launch/restart with a specific Chrome/Chromium profile."""
     page = await _get_page(
         runner=runner,
         user_data_dir=user_data_dir,
@@ -487,20 +668,140 @@ async def browser_type(
 
 
 @_tool()
-async def browser_screenshot(full_page: bool = False) -> list:
-    """Take a screenshot of the current page. Returns the image for visual analysis."""
+async def browser_screenshot(full_page: bool = False, path: str | None = None) -> list:
+    """Take a screenshot of the current page. Returns the image and optionally saves it to a path.
+
+    Pass path="auto" to save under /cmux-assets/<branch>/browser/... with a repo-local fallback.
+    """
     page = await _get_page()
     _next_request()
 
     try:
         screenshot_bytes = await page.screenshot(full_page=full_page, type="png")
+        saved_path = None
+        if path:
+            output = _resolve_artifact_path(path, "screenshot.png")
+            output.write_bytes(screenshot_bytes)
+            saved_path = str(output)
         b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+        text = f"Screenshot of {page.url} ({len(screenshot_bytes)} bytes)"
+        if saved_path:
+            text += f"\nSaved to: {saved_path}"
         return [
-            {"type": "text", "text": f"Screenshot of {page.url} ({len(screenshot_bytes)} bytes)"},
+            {"type": "text", "text": text},
             {"type": "image", "data": b64, "mimeType": "image/png"},
         ]
     except Exception as e:
         return [{"type": "text", "text": f"Screenshot failed: {e}"}]
+
+
+@_tool()
+async def browser_get(
+    kind: str,
+    selector: str | None = None,
+    attribute: str | None = None,
+) -> str:
+    """Get page or element data. kind: url, title, text, html, value, attr, count, box, styles."""
+    page = await _get_page()
+    _next_request()
+    kind = kind.strip().lower()
+
+    try:
+        if kind == "url":
+            return page.url
+        if kind == "title":
+            return await page.title()
+        if kind == "html" and selector is None:
+            html = await page.evaluate("document.documentElement.outerHTML")
+            return html[:50000] + ("\n\n... (truncated, 50k char limit)" if len(html) > 50000 else "")
+
+        if not selector:
+            return f"Get failed: selector is required for kind '{kind}'"
+
+        locator = page.locator(selector).first
+        if kind == "text":
+            return (await locator.text_content(timeout=5000)) or ""
+        if kind == "html":
+            return await locator.inner_html(timeout=5000)
+        if kind == "value":
+            return await locator.input_value(timeout=5000)
+        if kind == "attr":
+            if not attribute:
+                return "Get failed: attribute is required for kind 'attr'"
+            value = await locator.get_attribute(attribute, timeout=5000)
+            return "" if value is None else value
+        if kind == "count":
+            return str(await locator.count())
+        if kind == "box":
+            return json.dumps(await locator.bounding_box(timeout=5000), indent=2, default=str)
+        if kind == "styles":
+            if attribute:
+                value = await locator.evaluate(
+                    f"(el) => getComputedStyle(el).getPropertyValue({json.dumps(attribute)})"
+                )
+                return "" if value is None else str(value)
+            styles = await locator.evaluate(
+                """(el) => {
+                    const s = getComputedStyle(el);
+                    return {
+                        color: s.color,
+                        backgroundColor: s.backgroundColor,
+                        display: s.display,
+                        visibility: s.visibility,
+                        opacity: s.opacity,
+                        pointerEvents: s.pointerEvents,
+                    };
+                }"""
+            )
+            return json.dumps(styles, indent=2, default=str)
+        return f"Get failed: unsupported kind '{kind}'"
+    except Exception as e:
+        return f"Get failed: {e}"
+
+
+@_tool()
+async def browser_is(kind: str, selector: str) -> str:
+    """Check element state. kind: visible, enabled, checked."""
+    page = await _get_page()
+    _next_request()
+    kind = kind.strip().lower()
+    locator = page.locator(selector).first
+    try:
+        if kind == "visible":
+            value = await locator.is_visible(timeout=5000)
+        elif kind == "enabled":
+            value = await locator.is_enabled(timeout=5000)
+        elif kind == "checked":
+            value = await locator.is_checked(timeout=5000)
+        else:
+            return f"State check failed: unsupported kind '{kind}'"
+        return f"{kind}: {str(value).lower()}"
+    except Exception as e:
+        return f"State check failed: {e}"
+
+
+@_tool()
+async def browser_scroll_into_view(selector: str) -> str:
+    """Scroll a CSS selector into view."""
+    page = await _get_page()
+    _next_request()
+    try:
+        await page.locator(selector).first.scroll_into_view_if_needed(timeout=5000)
+        return f"Scrolled into view: {selector}"
+    except Exception as e:
+        return f"Scroll into view failed: {e}"
+
+
+@_tool()
+async def browser_focus(selector: str) -> str:
+    """Focus a CSS selector."""
+    page = await _get_page()
+    _next_request()
+    try:
+        await page.locator(selector).first.focus(timeout=5000)
+        return f"Focused: {selector}"
+    except Exception as e:
+        return f"Focus failed: {e}"
 
 
 @_tool()
@@ -578,9 +879,12 @@ async def browser_press_key(key: str) -> str:
 async def browser_wait(
     selector: str | None = None,
     text: str | None = None,
+    url_contains: str | None = None,
+    load_state: str | None = None,
+    javascript: str | None = None,
     timeout: int = 10000,
 ) -> str:
-    """Wait for a CSS selector to appear, or for text to appear on the page.
+    """Wait for a selector, text, URL substring, load state, JavaScript truthiness, or time.
     timeout is in milliseconds (default 10000)."""
     page = await _get_page()
 
@@ -588,12 +892,20 @@ async def browser_wait(
         if selector:
             await page.wait_for_selector(selector, timeout=timeout)
             return f"Selector '{selector}' appeared"
-        elif text:
+        if text:
             await page.get_by_text(text).first.wait_for(timeout=timeout)
             return f"Text '{text}' appeared"
-        else:
-            await asyncio.sleep(timeout / 1000)
-            return f"Waited {timeout}ms"
+        if url_contains:
+            await page.wait_for_url(f"**{url_contains}**", timeout=timeout)
+            return f"URL contains '{url_contains}'"
+        if load_state:
+            await page.wait_for_load_state(load_state, timeout=timeout)
+            return f"Load state '{load_state}' reached"
+        if javascript:
+            await page.wait_for_function(javascript, timeout=timeout)
+            return "Function returned truthy"
+        await asyncio.sleep(timeout / 1000)
+        return f"Waited {timeout}ms"
     except Exception as e:
         return f"Wait failed: {e}"
 
@@ -627,6 +939,284 @@ async def browser_select_option(
         return f"Selected option(s): {values}"
     except Exception as e:
         return f"Select failed: {e}"
+
+
+@_tool()
+async def browser_add_init_script(script: str) -> str:
+    """Add JavaScript that runs before future page scripts in this browser context."""
+    await _ensure_browser()
+    _next_request()
+    try:
+        await _fetcher._context.add_init_script(script)
+        return "Added init script for future pages"
+    except Exception as e:
+        return f"Add init script failed: {e}"
+
+
+@_tool()
+async def browser_add_script(script: str) -> str:
+    """Inject JavaScript into the current page."""
+    page = await _get_page()
+    _next_request()
+    try:
+        await page.add_script_tag(content=script)
+        return "Added script to current page"
+    except Exception as e:
+        return f"Add script failed: {e}"
+
+
+@_tool()
+async def browser_add_style(style: str) -> str:
+    """Inject CSS into the current page."""
+    page = await _get_page()
+    _next_request()
+    try:
+        await page.add_style_tag(content=style)
+        return "Added style to current page"
+    except Exception as e:
+        return f"Add style failed: {e}"
+
+
+@_tool()
+async def browser_cookies(
+    action: str = "get",
+    name: str | None = None,
+    value: str | None = None,
+    url: str | None = None,
+    domain: str | None = None,
+    path: str = "/",
+) -> str:
+    """Manage cookies. action: get, set, clear."""
+    await _ensure_browser()
+    _next_request()
+    action = action.strip().lower()
+    context = _fetcher._context
+
+    try:
+        if action == "get":
+            cookies = await context.cookies()
+            if name:
+                cookies = [cookie for cookie in cookies if cookie.get("name") == name]
+            return json.dumps(cookies, indent=2, default=str)
+
+        if action == "set":
+            if not name or value is None:
+                return "Cookie set failed: name and value are required"
+            cookie = {"name": name, "value": value, "path": path}
+            if url:
+                cookie["url"] = url
+            else:
+                if not domain:
+                    return "Cookie set failed: provide either url or domain"
+                cookie["domain"] = domain
+            await context.add_cookies([cookie])
+            return f"Set cookie {name}"
+
+        if action == "clear":
+            kwargs = {}
+            if name:
+                kwargs["name"] = name
+            if domain:
+                kwargs["domain"] = domain
+            if path and name:
+                kwargs["path"] = path
+            try:
+                await context.clear_cookies(**kwargs)
+            except TypeError:
+                await context.clear_cookies()
+            return "Cleared cookies"
+
+        return f"Cookie action failed: unsupported action '{action}'"
+    except Exception as e:
+        return f"Cookie action failed: {e}"
+
+
+def _storage_name(kind: str) -> str:
+    kind = kind.strip().lower()
+    if kind in {"local", "localstorage", "local_storage"}:
+        return "localStorage"
+    if kind in {"session", "sessionstorage", "session_storage"}:
+        return "sessionStorage"
+    raise ValueError("storage kind must be 'local' or 'session'")
+
+
+@_tool()
+async def browser_storage(
+    kind: str = "local",
+    action: str = "get",
+    key: str | None = None,
+    value: str | None = None,
+) -> str:
+    """Manage localStorage/sessionStorage. kind: local/session. action: get, set, clear."""
+    page = await _get_page()
+    _next_request()
+    action = action.strip().lower()
+
+    try:
+        storage = _storage_name(kind)
+        label = "localStorage" if storage == "localStorage" else "sessionStorage"
+
+        if action == "get":
+            if key:
+                result = await page.evaluate(f"(key) => {storage}.getItem(key)", key)
+                return "" if result is None else str(result)
+            result = await page.evaluate(
+                f"""() => Object.fromEntries(
+                    Array.from({{length: {storage}.length}}, (_, i) => {{
+                        const key = {storage}.key(i);
+                        return [key, {storage}.getItem(key)];
+                    }})
+                )"""
+            )
+            return json.dumps(result, indent=2, default=str)
+
+        if action == "set":
+            if not key or value is None:
+                return f"Set {label} failed: key and value are required"
+            await page.evaluate(f"(entry) => {storage}.setItem(entry.key, entry.value)", {"key": key, "value": value})
+            return f"Set {label} {key}"
+
+        if action == "clear":
+            await page.evaluate(f"() => {storage}.clear()")
+            return f"Cleared {label}"
+
+        return f"Storage action failed: unsupported action '{action}'"
+    except Exception as e:
+        return f"Storage action failed: {e}"
+
+
+async def _page_storage_snapshot(page) -> dict:
+    return await page.evaluate(
+        """() => ({
+            localStorage: Object.fromEntries(
+                Array.from({length: localStorage.length}, (_, i) => {
+                    const key = localStorage.key(i);
+                    return [key, localStorage.getItem(key)];
+                })
+            ),
+            sessionStorage: Object.fromEntries(
+                Array.from({length: sessionStorage.length}, (_, i) => {
+                    const key = sessionStorage.key(i);
+                    return [key, sessionStorage.getItem(key)];
+                })
+            ),
+        })"""
+    )
+
+
+async def _restore_page_storage(page, storage: dict) -> None:
+    await page.evaluate(
+        """(data) => {
+            window.__ultrastealthRestoreStorage = true;
+            localStorage.clear();
+            sessionStorage.clear();
+            for (const [key, value] of Object.entries(data.localStorage || {})) {
+                localStorage.setItem(key, value);
+            }
+            for (const [key, value] of Object.entries(data.sessionStorage || {})) {
+                sessionStorage.setItem(key, value);
+            }
+        }""",
+        storage,
+    )
+
+
+@_tool()
+async def browser_state_save(path: str | None = None) -> str:
+    """Save cookies plus current-page localStorage/sessionStorage to JSON."""
+    await _ensure_browser()
+    _next_request()
+    output = _resolve_artifact_path(path, "ultrastealth-browser-state.json")
+
+    try:
+        origins = []
+        tabs = []
+        for page in _fetcher._context.pages:
+            if page.is_closed() or page.url in ("about:blank", ""):
+                continue
+            storage = await _page_storage_snapshot(page)
+            origins.append({"url": page.url, **storage})
+            with contextlib.suppress(Exception):
+                tabs.append({"url": page.url, "title": await page.title(), "tab_id": _page_id(page)})
+
+        payload = {
+            "version": 1,
+            "saved_at": time.time(),
+            "cookies": await _fetcher._context.cookies(),
+            "origins": origins,
+            "tabs": tabs,
+        }
+        output.write_text(json.dumps(payload, indent=2, default=str))
+        return f"Saved browser state to {output}"
+    except Exception as e:
+        return f"Save browser state failed: {e}"
+
+
+@_tool()
+async def browser_state_load(path: str) -> str:
+    """Load cookies plus the first saved localStorage/sessionStorage snapshot into the current page."""
+    page = await _get_page()
+    _next_request()
+
+    try:
+        payload = json.loads(Path(path).expanduser().read_text())
+        cookies = payload.get("cookies") or []
+        if cookies:
+            await _fetcher._context.add_cookies(cookies)
+        origins = payload.get("origins") or []
+        if origins:
+            await _restore_page_storage(page, origins[0])
+        return f"Loaded browser state from {path}"
+    except Exception as e:
+        return f"Load browser state failed: {e}"
+
+
+def _format_diagnostics(entries: list[dict], empty_message: str) -> str:
+    if not entries:
+        return empty_message
+    lines = []
+    for entry in entries:
+        stamp = time.strftime("%H:%M:%S", time.localtime(entry.get("timestamp", 0)))
+        if "text" in entry:
+            location = entry.get("url") or entry.get("tab_id", "")
+            line = entry.get("line")
+            suffix = f":{line}" if line is not None else ""
+            lines.append(f"[{entry['id']}] {stamp} {entry.get('type', 'log')} {location}{suffix} {entry.get('text', '')}")
+        else:
+            lines.append(f"[{entry['id']}] {stamp} {entry.get('tab_id', '')} {entry.get('message', '')}")
+    return "\n".join(lines)
+
+
+@_tool()
+async def browser_console_list(limit: int = 50) -> str:
+    """List captured page console messages."""
+    _next_request()
+    return _format_diagnostics(_console_log[-limit:], "No console messages captured.")
+
+
+@_tool()
+async def browser_console_clear() -> str:
+    """Clear captured page console messages."""
+    _next_request()
+    count = len(_console_log)
+    _console_log.clear()
+    return f"Cleared {count} console message(s)."
+
+
+@_tool()
+async def browser_errors_list(limit: int = 50) -> str:
+    """List captured page errors."""
+    _next_request()
+    return _format_diagnostics(_page_errors[-limit:], "No page errors captured.")
+
+
+@_tool()
+async def browser_errors_clear() -> str:
+    """Clear captured page errors."""
+    _next_request()
+    count = len(_page_errors)
+    _page_errors.clear()
+    return f"Cleared {count} error(s)."
 
 
 # ─── Network Monitoring Helpers ──────────────────────────────────────
@@ -711,7 +1301,7 @@ def _detach_network_listeners(page):
 
 @_tool()
 async def browser_network_enable(max_entries: int = 1000) -> str:
-    """Start capturing network requests (like opening Chrome DevTools Network tab).
+    """Start capturing network requests (like opening a DevTools Network tab).
     Call this BEFORE navigating to capture all requests. Captures on all tabs.
 
     Args:
@@ -756,7 +1346,7 @@ async def browser_network_log(
     limit: int = 50,
     offset: int = 0,
 ) -> str:
-    """Get captured network requests — like the Chrome DevTools Network tab list.
+    """Get captured network requests — like a DevTools Network tab list.
 
     Args:
         filter_url: Filter by URL substring (e.g. "api", ".js", "graphql")
@@ -1002,7 +1592,11 @@ async def browser_close() -> str:
     """Close the browser completely. A new browser will start on next tool call."""
     global _fetcher, _page, _browser_config, _session_start, _request_count, _active_tab_id
     if _fetcher:
+        if _fetcher._context:
+            for page in list(_fetcher._context.pages):
+                _detach_page_diagnostics(page)
         _network_handlers.clear()
+        _diagnostic_handlers.clear()
         await _fetcher.close()
         _fetcher = None
         _page = None
@@ -1197,6 +1791,7 @@ async def browser_close_tab(tab_id: str) -> str:
     for p in _fetcher._context.pages:
         if _page_id(p) == tab_id and not p.is_closed():
             was_active = (tab_id == _active_tab_id)
+            _detach_page_diagnostics(p)
             await p.close()
 
             if was_active:
@@ -1226,6 +1821,7 @@ async def browser_new_tab(url: str | None = None) -> str:
     new_page = await _fetcher._context.new_page()
     _page = new_page
     _active_tab_id = _page_id(new_page)
+    _attach_page_diagnostics(new_page)
     if _network_enabled:
         _attach_network_listeners(new_page)
 
@@ -1278,6 +1874,7 @@ async def browser_cleanup(
         closed = 0
         for p in list(_fetcher._context.pages):
             if not p.is_closed() and p.url in ("about:blank", "") and _page_id(p) != _active_tab_id:
+                _detach_page_diagnostics(p)
                 await p.close()
                 closed += 1
         if closed:
@@ -1288,6 +1885,7 @@ async def browser_cleanup(
         closed = 0
         for p in list(_fetcher._context.pages):
             if not p.is_closed() and _page_id(p) != _active_tab_id:
+                _detach_page_diagnostics(p)
                 await p.close()
                 closed += 1
         if closed:
@@ -1366,7 +1964,7 @@ async def browser_restart(
     user_data_dir: str | None = None,
     runner: str | None = None,
 ) -> str:
-    """Restart browser. Optionally navigate URL and use a specific Chrome profile."""
+    """Restart browser. Optionally navigate URL and use a specific Chrome/Chromium profile."""
     global _fetcher, _page, _browser_config, _session_start, _request_count, _active_tab_id
 
     _next_request()
@@ -1375,7 +1973,11 @@ async def browser_restart(
         old_url = _page.url
 
     if _fetcher:
+        if _fetcher._context:
+            for page in list(_fetcher._context.pages):
+                _detach_page_diagnostics(page)
         _network_handlers.clear()
+        _diagnostic_handlers.clear()
         await _fetcher.close()
         _fetcher = None
         _page = None
@@ -1388,6 +1990,7 @@ async def browser_restart(
     _request_count = 0
     _active_tab_id = _page_id(_page)
     _browser_config = requested_config
+    _attach_page_diagnostics(_page)
     if _network_enabled:
         _attach_network_listeners(_page)
 
@@ -1416,7 +2019,19 @@ def main():
     )
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8090, help="Port to bind (default: 8090)")
+    parser.add_argument("--runner", default=None, help="Browser runner, e.g. chrome+default-profile")
+    parser.add_argument("--user-data-dir", default=None, help="Chrome/Chromium user-data directory")
+    parser.add_argument("--profile-directory", default=None, help="Chrome/Chromium profile directory")
     args = parser.parse_args()
+
+    if args.runner is not None:
+        os.environ["ULTRASTEALTH_RUNNER"] = _normalize_runner(args.runner)
+    if args.user_data_dir is not None:
+        os.environ["ULTRASTEALTH_USER_DATA_DIR"] = _normalize_chromium_user_data_dir(
+            args.user_data_dir
+        )
+    if args.profile_directory is not None:
+        os.environ["ULTRASTEALTH_PROFILE_DIRECTORY"] = args.profile_directory
 
     if args.transport == "stdio":
         mcp.run(transport="stdio")
