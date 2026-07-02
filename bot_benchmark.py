@@ -257,8 +257,38 @@ _CREEPJS_JS = r"""() => {
     if (headlessPct) out.meta.headless_pct = headlessPct[1];
     const likeHeadless = allText.match(/like\s*headless[:\s]*([\d.]+%)/i);
     if (likeHeadless) out.meta.like_headless_pct = likeHeadless[1];
+    const leadingLikeHeadless = allText.match(/([\d.]+%)\s+like\s*headless/i);
+    if (leadingLikeHeadless) out.meta.like_headless_pct = leadingLikeHeadless[1];
     return out;
 }"""
+
+
+def _parse_percent(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace("%", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _creepjs_checks(meta: dict) -> list[tuple[str, bool, str]]:
+    like_headless = _parse_percent(meta.get("like_headless_pct") or meta.get("headless_pct"))
+    if like_headless is None:
+        headless_passed = not meta.get("has_headless_warning", True)
+        headless_value = ""
+    else:
+        # CreepJS displays a "like headless" percentage even for ordinary browsers.
+        # Treat it as a signal strength, not as a binary failure from the word alone.
+        headless_passed = like_headless < 50
+        headless_value = f"{like_headless:g}% like headless"
+
+    return [
+        ("headless_detection", headless_passed, headless_value),
+        ("bot_detection", not meta.get("has_bot_warning", True), ""),
+        ("lie_detection", not meta.get("has_lie_warning", True), ""),
+    ]
 
 
 async def test_creepjs(method: str) -> SiteResult:
@@ -276,13 +306,8 @@ async def test_creepjs(method: str) -> SiteResult:
     result.elapsed_ms = round((time.time() - start) * 1000)
     result.raw = collected.get("meta", {})
 
-    checks = [
-        ("headless_detection", not result.raw.get("has_headless_warning", True)),
-        ("bot_detection", not result.raw.get("has_bot_warning", True)),
-        ("lie_detection", not result.raw.get("has_lie_warning", True)),
-    ]
-    for name, passed in checks:
-        result.tests.append(asdict(TestResult(name, passed, "", "pass" if passed else "fail")))
+    for name, passed, value in _creepjs_checks(result.raw):
+        result.tests.append(asdict(TestResult(name, passed, value, "pass" if passed else "fail")))
         if passed:
             result.passed += 1
         else:
@@ -922,6 +947,337 @@ async def test_fingerprintscan(method: str) -> SiteResult:
     return result
 
 
+def _append_collected_tests(result: SiteResult, collected: dict) -> SiteResult:
+    """Apply a standard `{tests, meta}` extraction payload to a SiteResult."""
+    result.raw = collected.get("meta", {})
+    for t in collected.get("tests", []):
+        name = t.get("name", "?")
+        passed = t.get("passed")
+        value = t.get("value", "")
+        if passed is True:
+            severity = "pass"
+            result.passed += 1
+        elif passed is False:
+            severity = "fail"
+            result.failed += 1
+        else:
+            severity = t.get("severity", "warn")
+            if severity == "skip":
+                result.skipped += 1
+            else:
+                severity = "warn"
+                result.warned += 1
+        result.tests.append(asdict(TestResult(name, passed, value, severity)))
+
+    result.total = result.passed + result.failed + result.warned + result.skipped
+    return result
+
+
+_SELENIUM_DETECTOR_PRE_JS = r"""(async () => {
+    try {
+        const token = window.token || '';
+        const asyncToken = typeof window.getAsyncToken === 'function'
+            ? await window.getAsyncToken()
+            : '';
+        const tokenInput = document.querySelector('#chromedriver-token');
+        const asyncInput = document.querySelector('#chromedriver-asynctoken');
+        if (tokenInput) {
+            tokenInput.value = token;
+            tokenInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        if (asyncInput) {
+            asyncInput.value = asyncToken;
+            asyncInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        document.querySelector('#chromedriver-test')?.click();
+    } catch (e) {}
+})()"""
+
+
+_SELENIUM_DETECTOR_JS = r"""() => {
+    const out = { tests: [], meta: {} };
+    const text = document.body.innerText || '';
+    const add = (name, passed, value = '') => out.tests.push({ name, passed, value: String(value).substring(0, 160) });
+
+    add('navigator.webdriver', navigator.webdriver !== true, navigator.webdriver);
+
+    const seleniumGlobals = Object.getOwnPropertyNames(window).filter(k =>
+        /webdriver|selenium|chromedriver|cdc_/i.test(k)
+    );
+    add('selenium_globals_absent', seleniumGlobals.length === 0, seleniumGlobals.join(', '));
+
+    const pageStatus = (text.match(/Chromedriver Detector\s+(Passed|Error|Failed)!?/i) || [])[0] || '';
+    const resultText = pageStatus || Array.from(document.querySelectorAll(
+        '#chromedriver-result, #result, .result, [id*="result"], [class*="result"], pre'
+    )).map(el => (el.innerText || '').trim()).find(Boolean) || '';
+    if (resultText) {
+        const normalized = resultText.toLowerCase();
+        const clean = /not detected|passed|success|undetected|not found/.test(normalized);
+        const detected = /\b(detected|failed|bot)\b/.test(normalized) && !/not detected/.test(normalized);
+        add('page_verdict', clean && !detected, resultText);
+    } else {
+        add('page_verdict', false, 'no verdict found');
+    }
+
+    out.meta.title = document.title;
+    out.meta.has_token = typeof window.token !== 'undefined';
+    out.meta.has_async_token = typeof window.getAsyncToken === 'function';
+    out.meta.body_snippet = text.substring(0, 240);
+    return out;
+}"""
+
+
+def _normalize_seleniumdetector_payload(collected: dict) -> dict:
+    """Prefer Selenium Detector's page-level headline over noisy form labels."""
+    body = str(collected.get("meta", {}).get("body_snippet", "")).lower()
+    if "chromedriver detector passed" not in body:
+        return collected
+
+    tests = collected.setdefault("tests", [])
+    for test in tests:
+        if test.get("name") == "page_verdict":
+            test["passed"] = True
+            test["value"] = "Chromedriver Detector Passed"
+            return collected
+
+    tests.append({
+        "name": "page_verdict",
+        "passed": True,
+        "value": "Chromedriver Detector Passed",
+    })
+    return collected
+
+
+async def test_seleniumdetector(method: str) -> SiteResult:
+    """hmaker.github.io/selenium-detector — ChromeDriver/Selenium token probe."""
+    result = SiteResult(site="seleniumdetector", method=method)
+    start = time.time()
+
+    try:
+        collected = await _run_extraction(
+            method,
+            "https://hmaker.github.io/selenium-detector/",
+            _SELENIUM_DETECTOR_JS,
+            wait_secs=2,
+            pre_eval_js=[_SELENIUM_DETECTOR_PRE_JS],
+        )
+    except Exception as e:
+        result.error = str(e)[:200]
+        result.elapsed_ms = round((time.time() - start) * 1000)
+        return result
+
+    result.elapsed_ms = round((time.time() - start) * 1000)
+    return _append_collected_tests(result, _normalize_seleniumdetector_payload(collected))
+
+
+_BROTECTOR_JS = r"""() => {
+    const out = { tests: [], meta: {} };
+    const text = document.body.innerText || '';
+    const seen = new Set();
+    const add = (name, passed, value = '') => {
+        const key = `${name}:${value}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.tests.push({ name, passed, value: String(value).substring(0, 160) });
+    };
+
+    document.querySelectorAll('tr, li, [class*="test"], [class*="result"], [data-testid], div').forEach(el => {
+        const rowText = (el.innerText || '').trim();
+        if (!rowText || rowText.length < 4 || rowText.length > 240) return;
+        const normalized = rowText.toLowerCase();
+        const mentionsProbe = /coordinates|istrusted|popup|pwinit|webdriver|selenium|playwright|chromedriver|detected|passed|failed/.test(normalized);
+        if (!mentionsProbe) return;
+        const hasGood = /not detected|passed|pass|clean|ok|false/.test(normalized);
+        const hasBad = /detected|failed|fail|leak|crash|true/.test(normalized) && !/not detected/.test(normalized);
+        if (hasGood || hasBad) {
+            const name = rowText.split('\n')[0].substring(0, 80);
+            add(name, hasGood && !hasBad, rowText);
+        }
+    });
+
+    add('navigator.webdriver', navigator.webdriver !== true, navigator.webdriver);
+    out.meta.title = document.title;
+    out.meta.body_snippet = text.substring(0, 240);
+    return out;
+}"""
+
+
+async def test_brotector(method: str) -> SiteResult:
+    """ttlns.github.io/brotector — browser automation and event leak detector."""
+    result = SiteResult(site="brotector", method=method)
+    start = time.time()
+
+    try:
+        collected = await _run_extraction(
+            method,
+            "https://ttlns.github.io/brotector/",
+            _BROTECTOR_JS,
+            wait_secs=5,
+        )
+    except Exception as e:
+        result.error = str(e)[:200]
+        result.elapsed_ms = round((time.time() - start) * 1000)
+        return result
+
+    result.elapsed_ms = round((time.time() - start) * 1000)
+    return _append_collected_tests(result, collected)
+
+
+_RECAPTCHA_DEMO_JS = r"""() => {
+    const out = { tests: [], meta: {} };
+    const text = document.body.innerText || '';
+    const html = document.documentElement.outerHTML || '';
+    const frames = Array.from(document.querySelectorAll('iframe')).map(frame => frame.src || '');
+    const hasRecaptcha = frames.some(src => /recaptcha/i.test(src)) ||
+        !!document.querySelector('.g-recaptcha, [data-sitekey], textarea[name="g-recaptcha-response"], input[name="g-recaptcha-response"]');
+    const response = document.querySelector('textarea[name="g-recaptcha-response"], input[name="g-recaptcha-response"]')?.value || '';
+    const blocked = /access denied|just a moment|checking your browser|unusual traffic|service unavailable/i.test(text);
+
+    out.tests.push({ name: 'page_loaded', passed: text.length > 20 || html.length > 1000, value: document.title });
+    out.tests.push({ name: 'recaptcha_rendered', passed: hasRecaptcha, value: frames.find(src => /recaptcha/i.test(src)) || '' });
+    out.tests.push({ name: 'no_block_page', passed: !blocked, value: blocked ? text.substring(0, 120) : 'ok' });
+    if (response) {
+        out.tests.push({ name: 'recaptcha_response_present', passed: response.length > 20, value: `${response.length} chars` });
+    }
+
+    out.meta.title = document.title;
+    out.meta.frame_count = frames.length;
+    out.meta.recaptcha_frames = frames.filter(src => /recaptcha/i.test(src)).length;
+    out.meta.response_length = response.length;
+    return out;
+}"""
+
+
+async def test_recaptcha_v2_invisible(method: str) -> SiteResult:
+    """2captcha.com demo — reCAPTCHA v2 invisible rendering/access probe."""
+    result = SiteResult(site="recaptcha_v2_invisible", method=method)
+    start = time.time()
+
+    try:
+        collected = await _run_extraction(
+            method,
+            "https://2captcha.com/demo/recaptcha-v2-invisible",
+            _RECAPTCHA_DEMO_JS,
+            wait_secs=5,
+        )
+    except Exception as e:
+        result.error = str(e)[:200]
+        result.elapsed_ms = round((time.time() - start) * 1000)
+        return result
+
+    result.elapsed_ms = round((time.time() - start) * 1000)
+    return _append_collected_tests(result, collected)
+
+
+async def test_recaptcha_v3(method: str) -> SiteResult:
+    """2captcha.com demo — reCAPTCHA v3 rendering/access probe."""
+    result = SiteResult(site="recaptcha_v3", method=method)
+    start = time.time()
+
+    try:
+        collected = await _run_extraction(
+            method,
+            "https://2captcha.com/demo/recaptcha-v3",
+            _RECAPTCHA_DEMO_JS,
+            wait_secs=5,
+        )
+    except Exception as e:
+        result.error = str(e)[:200]
+        result.elapsed_ms = round((time.time() - start) * 1000)
+        return result
+
+    result.elapsed_ms = round((time.time() - start) * 1000)
+    return _append_collected_tests(result, collected)
+
+
+_TURNSTILE_DEMO_JS = r"""() => {
+    const out = { tests: [], meta: {} };
+    const text = document.body.innerText || '';
+    const html = document.documentElement.outerHTML || '';
+    const frames = Array.from(document.querySelectorAll('iframe')).map(frame => frame.src || '');
+    const hasTurnstile = frames.some(src => /challenges\.cloudflare\.com|turnstile/i.test(src)) ||
+        !!document.querySelector('.cf-turnstile, [data-sitekey], input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+    const response = document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]')?.value || '';
+    const blocked = /access denied|just a moment|checking your browser|service unavailable/i.test(text);
+
+    out.tests.push({ name: 'page_loaded', passed: text.length > 20 || html.length > 1000, value: document.title });
+    out.tests.push({ name: 'turnstile_rendered', passed: hasTurnstile, value: frames.find(src => /cloudflare|turnstile/i.test(src)) || '' });
+    out.tests.push({ name: 'no_block_page', passed: !blocked, value: blocked ? text.substring(0, 120) : 'ok' });
+    out.tests.push({ name: 'turnstile_response_present', passed: response.length > 20, value: `${response.length} chars` });
+
+    out.meta.title = document.title;
+    out.meta.frame_count = frames.length;
+    out.meta.turnstile_frames = frames.filter(src => /cloudflare|turnstile/i.test(src)).length;
+    out.meta.response_length = response.length;
+    return out;
+}"""
+
+
+async def test_turnstiledemo(method: str) -> SiteResult:
+    """turnstiledemo.lusostreams.com — embedded Cloudflare Turnstile demo."""
+    result = SiteResult(site="turnstiledemo", method=method)
+    start = time.time()
+
+    try:
+        collected = await _run_extraction(
+            method,
+            "https://turnstiledemo.lusostreams.com/",
+            _TURNSTILE_DEMO_JS,
+            wait_secs=8,
+            solve_cloudflare=True,
+        )
+    except Exception as e:
+        result.error = str(e)[:200]
+        result.elapsed_ms = round((time.time() - start) * 1000)
+        return result
+
+    result.elapsed_ms = round((time.time() - start) * 1000)
+    return _append_collected_tests(result, collected)
+
+
+_EGP_ANNOUNCEMENTS_JS = r"""() => {
+    const out = { tests: [], meta: {} };
+    const text = document.body.innerText || '';
+    const html = document.documentElement.outerHTML || '';
+    const title = document.title || '';
+    const hasChallenge = /challenges\.cloudflare\.com|cf-turnstile|just a moment|checking your browser/i.test(html + '\n' + text);
+    const hasAnnouncementShell = /announcement|egp-agpc|ประกาศ|จัดซื้อ|จัดจ้าง|กรมบัญชีกลาง/i.test(text + '\n' + html);
+    const hardError = /access denied|service unavailable|not authorized|forbidden/i.test(text);
+
+    out.tests.push({ name: 'page_loaded', passed: html.length > 1000, value: title });
+    out.tests.push({ name: 'no_cloudflare_challenge', passed: !hasChallenge, value: hasChallenge ? 'challenge present' : 'ok' });
+    out.tests.push({ name: 'announcement_app_visible', passed: hasAnnouncementShell && !hardError, value: text.substring(0, 160) });
+
+    out.meta.title = title;
+    out.meta.html_length = html.length;
+    out.meta.text_length = text.length;
+    out.meta.has_challenge = hasChallenge;
+    return out;
+}"""
+
+
+async def test_egp_announcements(method: str) -> SiteResult:
+    """process5.gprocurement.go.th — Thai e-GP announcement access probe."""
+    result = SiteResult(site="egp_announcements", method=method)
+    start = time.time()
+
+    try:
+        collected = await _run_extraction(
+            method,
+            "https://process5.gprocurement.go.th/egp-agpc01-web/announcement?announcementTodayFlag=true",
+            _EGP_ANNOUNCEMENTS_JS,
+            wait_secs=10,
+            solve_cloudflare=True,
+        )
+    except Exception as e:
+        result.error = str(e)[:200]
+        result.elapsed_ms = round((time.time() - start) * 1000)
+        return result
+
+    result.elapsed_ms = round((time.time() - start) * 1000)
+    return _append_collected_tests(result, collected)
+
+
 # ---------------------------------------------------------------------------
 # Site registry
 # ---------------------------------------------------------------------------
@@ -942,6 +1298,12 @@ SITES = {
     "browserleaks": {"fn": test_browserleaks, "url": "tls.browserleaks.com/json", "desc": "JA3/JA4/Akamai fingerprint"},
     "cloudflare": {"fn": test_cloudflare, "url": "nowsecure.nl", "desc": "Cloudflare JS challenge bypass"},
     "cftrace": {"fn": test_cftrace, "url": "cloudflare.com/cdn-cgi/trace", "desc": "Cloudflare TLS/HTTP trace"},
+    "brotector": {"fn": test_brotector, "url": "ttlns.github.io/brotector", "desc": "Browser automation/event leak detector"},
+    "seleniumdetector": {"fn": test_seleniumdetector, "url": "hmaker.github.io/selenium-detector", "desc": "ChromeDriver/Selenium token detector"},
+    "recaptcha_v2_invisible": {"fn": test_recaptcha_v2_invisible, "url": "2captcha.com/demo/recaptcha-v2-invisible", "desc": "reCAPTCHA v2 invisible demo access"},
+    "recaptcha_v3": {"fn": test_recaptcha_v3, "url": "2captcha.com/demo/recaptcha-v3", "desc": "reCAPTCHA v3 demo access"},
+    "turnstiledemo": {"fn": test_turnstiledemo, "url": "turnstiledemo.lusostreams.com", "desc": "Cloudflare Turnstile demo access"},
+    "egp_announcements": {"fn": test_egp_announcements, "url": "process5.gprocurement.go.th announcement", "desc": "Thai e-GP announcement access"},
 }
 
 # ---------------------------------------------------------------------------

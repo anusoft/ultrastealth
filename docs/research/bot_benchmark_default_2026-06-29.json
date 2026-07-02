@@ -1,0 +1,791 @@
+{
+  "timestamp": "2026-06-29T17:04:09.243352+00:00",
+  "env": {
+    "rebrowser_mode": "alwaysIsolated",
+    "python": "3.14.6 (main, Jun 10 2026, 10:03:53) [Clang 17.0.0 (clang-1700.6.4.2)]"
+  },
+  "sites_tested": [
+    "devbrowserinfo",
+    "browserscan",
+    "rebrowser",
+    "sannysoft",
+    "areyouheadless",
+    "brotector",
+    "creepjs",
+    "pixelscan",
+    "incolumitas",
+    "seleniumdetector",
+    "recaptcha_v2_invisible",
+    "recaptcha_v3",
+    "turnstiledemo",
+    "egp_announcements"
+  ],
+  "methods_tested": [
+    "ultrastealth"
+  ],
+  "results": [
+    {
+      "site": "devbrowserinfo",
+      "method": "ultrastealth",
+      "passed": 21,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 21,
+      "error": "",
+      "elapsed_ms": 7492,
+      "tests": [
+        {
+          "name": "isBot",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasBotUserAgent",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasWebdriverTrue",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasWebdriverInFrameTrue",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isPlaywright",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasInconsistentChromeObject",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isPhantom",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isNightmare",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isSequentum",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isSeleniumChromeDefault",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isHeadlessChrome",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isWebGLInconsistent",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isAutomatedWithCDP",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isAutomatedWithCDPInWebWorker",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasInconsistentClientHints",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasInconsistentGPUFeatures",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "isIframeOverridden",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasInconsistentWorkerValues",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasHighHardwareConcurrency",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasHeadlessChromeDefaultScreenResolution",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "hasSuspiciousWeakSignals",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "cardClass": "result-card is-human"
+      }
+    },
+    {
+      "site": "browserscan",
+      "method": "ultrastealth",
+      "passed": 1,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 1,
+      "error": "",
+      "elapsed_ms": 7449,
+      "tests": [
+        {
+          "name": "WebDriver",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "webdriver": false
+      }
+    },
+    {
+      "site": "rebrowser",
+      "method": "ultrastealth",
+      "passed": 6,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 4,
+      "total": 10,
+      "error": "",
+      "elapsed_ms": 5602,
+      "tests": [
+        {
+          "name": "0.1 ms",
+          "passed": null,
+          "value": "Call window.dummyFn() to test if you can access main world objects.",
+          "severity": "skip"
+        },
+        {
+          "name": "0.6 ms",
+          "passed": null,
+          "value": "Call document.getElementById('detections-json') to test sourceUrl leak.",
+          "severity": "skip"
+        },
+        {
+          "name": "0.6 ms",
+          "passed": null,
+          "value": "Call document.getElementsByClassName('div') to trigger this test. If you did and the test wasn't triggered, then you're running it in an isolated world, which is safe and not detectable.",
+          "severity": "skip"
+        },
+        {
+          "name": "0.7 ms",
+          "passed": true,
+          "value": "No leak detected.",
+          "severity": "pass"
+        },
+        {
+          "name": "1.1 ms",
+          "passed": null,
+          "value": "No window.exposedFn. Use page.exposeFunction to trigger this test.",
+          "severity": "skip"
+        },
+        {
+          "name": "1.3 ms",
+          "passed": true,
+          "value": "No webdriver presented.",
+          "severity": "pass"
+        },
+        {
+          "name": "6.2 ms",
+          "passed": true,
+          "value": "Viewport is different from default values used in automation libraries.\n{\n  \"width\": 1432,\n  \"height\": 822\n}",
+          "severity": "pass"
+        },
+        {
+          "name": "6.8 ms",
+          "passed": true,
+          "value": "No window.__pwInitScripts detected.",
+          "severity": "pass"
+        },
+        {
+          "name": "11.1 ms",
+          "passed": true,
+          "value": "Content Security Policy (CSP) is enabled, it's expected behavior.",
+          "severity": "pass"
+        },
+        {
+          "name": "352.1 ms",
+          "passed": true,
+          "value": "Google Chrome version is not higher than the latest stable release version which is fine.\n{\n  \"useragentVersionItems\": [\n    {\n      \"brand\": \"Google Chrome\",\n      \"version\": \"149.0.7827.197\"\n    },\n    {\n      \"brand\": \"Chromium\",\n      \"version\": \"149.0.7827.197\"\n    }\n  ],\n  \"latestStableRelease\": {\n    \"version\": \"149.0.7827.201\",\n    \"date\": \"2026-06-25T20:49:51.556Z\"\n  }\n}",
+          "severity": "pass"
+        }
+      ],
+      "raw": {}
+    },
+    {
+      "site": "sannysoft",
+      "method": "ultrastealth",
+      "passed": 31,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 31,
+      "error": "",
+      "elapsed_ms": 5228,
+      "tests": [
+        {
+          "name": "User Agent\n(Old)",
+          "passed": true,
+          "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+          "severity": "pass"
+        },
+        {
+          "name": "WebDriver\n(New)",
+          "passed": true,
+          "value": "missing (passed)",
+          "severity": "pass"
+        },
+        {
+          "name": "WebDriver Advanced",
+          "passed": true,
+          "value": "passed",
+          "severity": "pass"
+        },
+        {
+          "name": "Chrome\n(New)",
+          "passed": true,
+          "value": "present (passed)",
+          "severity": "pass"
+        },
+        {
+          "name": "Permissions\n(New)",
+          "passed": true,
+          "value": "granted",
+          "severity": "pass"
+        },
+        {
+          "name": "Plugins Length\n(Old)",
+          "passed": true,
+          "value": "5",
+          "severity": "pass"
+        },
+        {
+          "name": "Plugins is of type PluginArray",
+          "passed": true,
+          "value": "passed",
+          "severity": "pass"
+        },
+        {
+          "name": "Languages\n(Old)",
+          "passed": true,
+          "value": "en-US",
+          "severity": "pass"
+        },
+        {
+          "name": "WebGL Vendor",
+          "passed": true,
+          "value": "Google Inc. (Apple)",
+          "severity": "pass"
+        },
+        {
+          "name": "WebGL Renderer",
+          "passed": true,
+          "value": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)",
+          "severity": "pass"
+        },
+        {
+          "name": "Broken Image Dimensions",
+          "passed": true,
+          "value": "16x16",
+          "severity": "pass"
+        },
+        {
+          "name": "PHANTOM_UA",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "PHANTOM_PROPERTIES",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "PHANTOM_ETSL",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "PHANTOM_LANGUAGE",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "PHANTOM_WEBSOCKET",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "MQ_SCREEN",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "PHANTOM_OVERFLOW",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "PHANTOM_WINDOW_HEIGHT",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "HEADCHR_UA",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "HEADCHR_CHROME_OBJ",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "HEADCHR_PERMISSIONS",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "HEADCHR_PLUGINS",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "HEADCHR_IFRAME",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "CHR_DEBUG_TOOLS",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "SELENIUM_DRIVER",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "CHR_BATTERY",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "CHR_MEMORY",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "TRANSPARENT_PIXEL",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "SEQUENTUM",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "VIDEO_CODECS",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "webdriver": false,
+        "webdriver_type": "boolean",
+        "plugins": 5,
+        "languages": [
+          "en-US"
+        ],
+        "chrome": true,
+        "platform": "MacIntel",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+        "webgl_vendor": "Google Inc. (Apple)",
+        "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)"
+      }
+    },
+    {
+      "site": "areyouheadless",
+      "method": "ultrastealth",
+      "passed": 1,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 1,
+      "error": "",
+      "elapsed_ms": 6090,
+      "tests": [
+        {
+          "name": "headless_detection",
+          "passed": true,
+          "value": "Antoine Vastel\nStatistics browser fingerprinting\nSee your fingerprint\nBots IPs API doc\nTest an IP ad",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "response": "Antoine Vastel\nStatistics browser fingerprinting\nSee your fingerprint\nBots IPs API doc\nTest an IP address\nAre you chrome headless?\n\nLooking for a more recent fingerprinting and bot detection online test? Have a look at fingerprint-scan.com.\n\nYou are not Chrome headless\n\nThis page runs a simple test "
+      }
+    },
+    {
+      "site": "brotector",
+      "method": "ultrastealth",
+      "passed": 1,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 1,
+      "error": "",
+      "elapsed_ms": 6366,
+      "tests": [
+        {
+          "name": "navigator.webdriver",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "title": "Brotector",
+        "body_snippet": "Brotector, a webdriver detector\nClick here\nSource-code\nDetection\tms since load\tType\tscore\tdata\nAverage\t\t\t0\t\ncopy as JSON"
+      }
+    },
+    {
+      "site": "creepjs",
+      "method": "ultrastealth",
+      "passed": 3,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 3,
+      "error": "",
+      "elapsed_ms": 10359,
+      "tests": [
+        {
+          "name": "headless_detection",
+          "passed": true,
+          "value": "31% like headless",
+          "severity": "pass"
+        },
+        {
+          "name": "bot_detection",
+          "passed": true,
+          "value": "",
+          "severity": "pass"
+        },
+        {
+          "name": "lie_detection",
+          "passed": true,
+          "value": "",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "fingerprint": "FP ID: 88042056ed0b0d29115fdbfc3c889eb4f66585ec5483a8675d474f49e994afd2\nFuzzy: d0bff8a1de2d1059c50945ff36e67ca7ff63730637950affc6d2000000000000\n368.20 ms\nWebRTCf630e922\nhost connection:\nblocked\nfoundation/ip:\nunsupported\nblocked\nsdp capabilities: 52dcc46c\nstun connection:\nblocked\ndevices (3):\nmic, a",
+        "headless": "31% like headless: 0cc8cb28",
+        "has_headless_warning": true,
+        "has_bot_warning": false,
+        "has_lie_warning": false,
+        "fp_id": "88042056ed0b0d29115fdbfc3c889eb4f66585ec5483a8675d474f49e994afd2",
+        "stealth_score": "0",
+        "like_headless_pct": "31%"
+      }
+    },
+    {
+      "site": "pixelscan",
+      "method": "ultrastealth",
+      "passed": 0,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 0,
+      "error": "",
+      "elapsed_ms": 11318,
+      "tests": [],
+      "raw": {
+        "detected_bot": false,
+        "consistent_count": 0,
+        "inconsistent_count": 0,
+        "webdriver": false
+      }
+    },
+    {
+      "site": "incolumitas",
+      "method": "ultrastealth",
+      "passed": 0,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 0,
+      "error": "",
+      "elapsed_ms": 9648,
+      "tests": [],
+      "raw": {
+        "results_text": "              ",
+        "behavioral_score": NaN,
+        "detected_bot": false,
+        "webdriver": false
+      }
+    },
+    {
+      "site": "seleniumdetector",
+      "method": "ultrastealth",
+      "passed": 2,
+      "failed": 1,
+      "warned": 0,
+      "skipped": 0,
+      "total": 3,
+      "error": "",
+      "elapsed_ms": 5991,
+      "tests": [
+        {
+          "name": "navigator.webdriver",
+          "passed": true,
+          "value": "false",
+          "severity": "pass"
+        },
+        {
+          "name": "selenium_globals_absent",
+          "passed": true,
+          "value": "",
+          "severity": "pass"
+        },
+        {
+          "name": "page_verdict",
+          "passed": false,
+          "value": "Chromedriver Detector Error!",
+          "severity": "fail"
+        }
+      ],
+      "raw": {
+        "title": "Selenium Detector",
+        "has_token": false,
+        "has_async_token": false,
+        "body_snippet": "Chromedriver Detector Error!\nFor the interactions test fill the input fields below with the value of window.token variable and the value returned by the async function window.getAsyncToken() using selenium automation. Then click on \"Interac"
+      }
+    },
+    {
+      "site": "recaptcha_v2_invisible",
+      "method": "ultrastealth",
+      "passed": 3,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 3,
+      "error": "",
+      "elapsed_ms": 7117,
+      "tests": [
+        {
+          "name": "page_loaded",
+          "passed": true,
+          "value": "Google reCAPTCHA v2 Invisible demo: Sample Form with Google reCAPTCHA v2 Invisible",
+          "severity": "pass"
+        },
+        {
+          "name": "recaptcha_rendered",
+          "passed": true,
+          "value": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=6LdO5_IbAAAAAAeVBL9TClS19NUTt5wswEb3Q7C5&co=aHR0cHM6Ly8yY2FwdGNoYS5jb206NDQz&hl=en&v=TnA7HacJFoBWt9hnlunBlYfK&size=invisible&anchor-ms=20000&execute-ms=30000&cb=shhji2dmzxvt",
+          "severity": "pass"
+        },
+        {
+          "name": "no_block_page",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "title": "Google reCAPTCHA v2 Invisible demo: Sample Form with Google reCAPTCHA v2 Invisible",
+        "frame_count": 5,
+        "recaptcha_frames": 2,
+        "response_length": 0
+      }
+    },
+    {
+      "site": "recaptcha_v3",
+      "method": "ultrastealth",
+      "passed": 3,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 3,
+      "error": "",
+      "elapsed_ms": 7107,
+      "tests": [
+        {
+          "name": "page_loaded",
+          "passed": true,
+          "value": "Google reCAPTCHA v3 demo: Sample Form with Google reCAPTCHA v3",
+          "severity": "pass"
+        },
+        {
+          "name": "recaptcha_rendered",
+          "passed": true,
+          "value": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Lcyqq8oAAAAAJE7eVJ3aZp_hnJcI6LgGdYD8lge&co=aHR0cHM6Ly8yY2FwdGNoYS5jb206NDQz&hl=en&v=TnA7HacJFoBWt9hnlunBlYfK&size=invisible&anchor-ms=20000&execute-ms=30000&cb=ekjvo1ubow1",
+          "severity": "pass"
+        },
+        {
+          "name": "no_block_page",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "title": "Google reCAPTCHA v3 demo: Sample Form with Google reCAPTCHA v3",
+        "frame_count": 4,
+        "recaptcha_frames": 1,
+        "response_length": 0
+      }
+    },
+    {
+      "site": "turnstiledemo",
+      "method": "ultrastealth",
+      "passed": 4,
+      "failed": 0,
+      "warned": 0,
+      "skipped": 0,
+      "total": 4,
+      "error": "",
+      "elapsed_ms": 46170,
+      "tests": [
+        {
+          "name": "page_loaded",
+          "passed": true,
+          "value": "Turnstile Demo | Cloudflare",
+          "severity": "pass"
+        },
+        {
+          "name": "turnstile_rendered",
+          "passed": true,
+          "value": "",
+          "severity": "pass"
+        },
+        {
+          "name": "no_block_page",
+          "passed": true,
+          "value": "ok",
+          "severity": "pass"
+        },
+        {
+          "name": "turnstile_response_present",
+          "passed": true,
+          "value": "773 chars",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "title": "Turnstile Demo | Cloudflare",
+        "frame_count": 1,
+        "turnstile_frames": 0,
+        "response_length": 773
+      }
+    },
+    {
+      "site": "egp_announcements",
+      "method": "ultrastealth",
+      "passed": 2,
+      "failed": 1,
+      "warned": 0,
+      "skipped": 0,
+      "total": 3,
+      "error": "",
+      "elapsed_ms": 46899,
+      "tests": [
+        {
+          "name": "page_loaded",
+          "passed": true,
+          "value": "eGP All Web",
+          "severity": "pass"
+        },
+        {
+          "name": "no_cloudflare_challenge",
+          "passed": false,
+          "value": "challenge present",
+          "severity": "fail"
+        },
+        {
+          "name": "announcement_app_visible",
+          "passed": true,
+          "value": "false\n\u0e23\u0e30\u0e1a\u0e1a\u0e08\u0e31\u0e14\u0e0b\u0e37\u0e49\u0e2d\u0e08\u0e31\u0e14\u0e08\u0e49\u0e32\u0e07\u0e20\u0e32\u0e04\u0e23\u0e31\u0e10\u0e14\u0e49\u0e27\u0e22\u0e2d\u0e34\u0e40\u0e25\u0e47\u0e01\u0e17\u0e23\u0e2d\u0e19\u0e34\u0e01\u0e2a\u0e4c\ne-Government Procurement\n\u00a0\u00a0\n\u0e40\u0e27\u0e2d\u0e23\u0e4c\u0e0a\u0e31\u0e48\u0e19 1.0.0\n\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48 29 \u0e21\u0e34\u0e16\u0e38\u0e19\u0e32\u0e22\u0e19 2569 \u00a0\u00a0\n\u0e04\u0e49\u0e19\u0e2b\u0e32\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e42\u0e04\u0e23\u0e07\u0e01\u0e32\u0e23\u0e08\u0e31\u0e14\u0e0b\u0e37\u0e49\u0e2d\u0e08\u0e31\u0e14\u0e08\u0e49\u0e32\u0e07\nevent_a",
+          "severity": "pass"
+        }
+      ],
+      "raw": {
+        "title": "eGP All Web",
+        "html_length": 74135,
+        "text_length": 3666,
+        "has_challenge": true
+      }
+    }
+  ]
+}
