@@ -7,8 +7,12 @@ bar; you mostly fill in the captured endpoint and the response shape.
 
 ## Setup
 ```bash
-bun add scrapling-js
+curl -fsSL https://raw.githubusercontent.com/anusoft/scrapling-js/main/install.sh | bash
 ```
+This bootstraps the current script directory as a Bun project and installs
+`scrapling-js` from GitHub. In an existing Bun project, run
+`bun add github:anusoft/scrapling-js` until the npm package is published.
+
 Docs: https://anusoft.github.io/scrapling-js/
 
 ## What to change in the template
@@ -33,6 +37,16 @@ Docs: https://anusoft.github.io/scrapling-js/
 - The `Response` has `.ok`, `.status`, `.body` (string), `.headers`, `.cookies`,
   and the selector API (`.css(...)`, `.xpath(...)`). There is **no `.json()`** —
   use `JSON.parse(r.body)`.
+
+## Passive Cloudflare / WAF 403s
+If a JSON route works in the Ultrastealth browser but plain `Fetcher` gets a
+Cloudflare 403 with no Turnstile, no Managed Challenge, and no browser-minted
+token/cookie requirement, keep Path A and use the TLS-impersonated transport:
+import `generateChromeHeaders` from `scrapling-js`, import `fetch` from
+`wreq-js`, then call `wreq-js` with `browser: chrome_<version>`, the returned
+`os`, and the generated headers. Verify the exact endpoint returns 2xx before
+generating the crawler. If the route needs an interactive token such as
+`cf_clearance`, switch to Path B.
 
 ## Selectors (only when you must parse HTML, not an API)
 ```js
