@@ -52,6 +52,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("REBROWSER_PATCHES_RUNTIME_FIX_MODE", "addBinding")
 
 from ultrastealth.fetcher import UltrastealthFetcher
+import browser_core  # shared warm-browser engine (batch + snapshot refs)
+from client import UltrastealthClient, default_sock  # route to the warm daemon when present
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("ultrastealth.mcp")
@@ -616,6 +618,70 @@ async def browser_get_state(include_screenshot: bool = False) -> str:
         result += "\n\n(Use browser_screenshot for visual capture)"
 
     return result
+
+
+def _daemon_available() -> bool:
+    """True when a warm daemon socket exists (unless explicitly disabled).
+
+    When a daemon is running, the MCP server routes browser work through it so
+    that Claude (via MCP) and the shell/CLI drive the SAME warm browser. Set
+    ULTRASTEALTH_MCP_NO_DAEMON=1 to force the MCP server to own its own browser.
+    """
+    if os.environ.get("ULTRASTEALTH_MCP_NO_DAEMON") == "1":
+        return False
+    return os.path.exists(default_sock())
+
+
+@_tool()
+async def browser_batch(steps: str) -> str:
+    """Run a sequence of browser steps in ONE call, collapsing round-trips.
+
+    `steps` is a JSON array of {"op": name, ...args}, e.g.
+    [{"op":"navigate","url":"https://x"},{"op":"wait","selector":"#ready"},
+     {"op":"click","target":"e2"},{"op":"snapshot"}].
+    Ops: navigate, reload, go_back, wait, click, type, fill, press, hover, focus,
+    scroll_into_view, select, scroll, get, is, evaluate, snapshot, screenshot.
+    `target` is a snapshot ref (e2) or a CSS selector. Stops on the first error.
+    Prefer this over many single-action calls; end with a "snapshot" step to get
+    fresh refs back in the same response."""
+    parsed = json.loads(steps)
+    if _daemon_available():
+        client = UltrastealthClient()
+        result = await client.call("batch", steps=parsed)
+        return json.dumps(result, indent=2)
+    page = await _get_page()
+    _next_request()
+    browser_core._fetcher = _fetcher
+    browser_core._page = page
+    result = await browser_core.batch(parsed)
+    return json.dumps(result, indent=2)
+
+
+@_tool()
+async def browser_snapshot(interactive: bool = True, compact: bool = True, diff: bool = False) -> str:
+    """Accessibility snapshot with STABLE refs (e0, e1, …). Use the eN refs with
+    browser_click/browser_type (which also accept CSS selectors). Prefer this over
+    screenshots — it is far cheaper and refs are stable within a snapshot. Pass
+    diff=True to see only what changed since the last snapshot of this tab."""
+    if _daemon_available():
+        client = UltrastealthClient()
+        snap = await client.call("snapshot", interactive=interactive, compact=compact, diff=diff)
+    else:
+        page = await _get_page()
+        _next_request()
+        browser_core._fetcher = _fetcher
+        browser_core._page = page
+        snap = await browser_core.snapshot(interactive=interactive, compact=compact, diff=diff)
+    lines = [f"URL: {snap['url']}", f"Title: {snap['title']}", "Elements:"]
+    for e in snap["refs"]:
+        parts = [f"[{e['ref']}]", f"<{e['role']}>"]
+        if e.get("name"):
+            parts.append(f'"{e["name"]}"')
+        for prop in ("checked", "selected", "expanded", "disabled"):
+            if e.get(prop) is not None:
+                parts.append(f"{prop}={e[prop]}")
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
 
 
 @_tool()
