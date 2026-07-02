@@ -5,6 +5,9 @@ repo_url="${ULTRASTEALTH_REPO_URL:-https://github.com/anusoft/ultrastealth.git}"
 repo_ref="${ULTRASTEALTH_REF:-main}"
 install_dir="${ULTRASTEALTH_INSTALL_DIR:-$HOME/.ultrastealth/src/ultrastealth}"
 python_cmd="${PYTHON:-python3}"
+use_venv="${ULTRASTEALTH_USE_VENV:-auto}"
+venv_dir="${ULTRASTEALTH_VENV_DIR:-}"
+bin_dir="${ULTRASTEALTH_BIN_DIR:-$HOME/.local/bin}"
 
 usage() {
   cat <<'USAGE'
@@ -18,6 +21,9 @@ Environment:
   ULTRASTEALTH_INSTALL_DIR=~/.ultrastealth/src/ultrastealth
   ULTRASTEALTH_REPO_URL=https://github.com/anusoft/ultrastealth.git
   ULTRASTEALTH_REF=main
+  ULTRASTEALTH_USE_VENV=auto
+  ULTRASTEALTH_VENV_DIR=<install-dir>/.venv
+  ULTRASTEALTH_BIN_DIR=~/.local/bin
 USAGE
 }
 
@@ -57,9 +63,33 @@ else
   fi
 fi
 
+if [[ -z "$venv_dir" ]]; then
+  venv_dir="$repo_dir/.venv"
+fi
+
+if [[ "$use_venv" == "auto" ]]; then
+  use_venv="1"
+fi
+
+if [[ "$use_venv" != "0" ]]; then
+  if [[ ! -x "$venv_dir/bin/python" ]]; then
+    "$python_cmd" -m venv "$venv_dir"
+  fi
+  python_cmd="$venv_dir/bin/python"
+fi
+
 cd "$repo_dir"
 if ! "$python_cmd" -m pip --version >/dev/null 2>&1; then
   "$python_cmd" -m ensurepip --upgrade
 fi
 "$python_cmd" -m pip install -e .
+if [[ "$use_venv" != "0" && -n "$bin_dir" ]]; then
+  mkdir -p "$bin_dir"
+  for cmd in ultrastealth us ultrastealth-mcp ultrastealth-install ultrastealth-patch; do
+    if [[ -x "$venv_dir/bin/$cmd" ]]; then
+      ln -sf "$venv_dir/bin/$cmd" "$bin_dir/$cmd"
+    fi
+  done
+  echo "Ultrastealth commands linked into $bin_dir"
+fi
 "$python_cmd" -m ultrastealth.install "$@"
