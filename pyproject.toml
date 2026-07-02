@@ -28,6 +28,8 @@ Homepage = "https://anusoft.github.io/ultrastealth/"
 Repository = "https://github.com/anusoft/ultrastealth"
 
 [project.scripts]
+ultrastealth = "ultrastealth.cli:main"
+us = "ultrastealth.cli:main"
 ultrastealth-mcp = "ultrastealth.mcp_server:main"
 ultrastealth-install = "ultrastealth.install:main"
 ultrastealth-patch = "ultrastealth.patch_rebrowser:main"
