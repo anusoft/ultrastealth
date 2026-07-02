@@ -112,6 +112,63 @@ browser_restart({"navigate_to": "https://mail.google.com", "profile_directory": 
 
 You can also pass `user_data_dir` and `runner` on those MCP calls. Explicit profile requests do not silently fall back to a temporary profile; if Chrome has locked that user-data directory, close Chrome or choose a separate `user_data_dir`.
 
+## Warm Daemon + Fast CLI
+
+For fast, deterministic driving — from the shell, from scripts, or from an agent —
+run a **warm-browser daemon** and talk to it with the `ultrastealth` CLI (alias
+`us`). The daemon owns **one** persistent-profile Chrome and keeps it warm, so
+every command attaches in milliseconds instead of cold-booting Chrome (seconds)
+each time. Exactly one process holds the CDP connection; the CLI, the MCP server,
+and `connect()` scripts all attach to it — so they share the same session.
+
+```bash
+ultrastealth daemon start                                   # warm Chrome, once
+ultrastealth browser navigate https://example.com
+ultrastealth browser snapshot --interactive --compact      # → [e0] <button> "Login" …
+ultrastealth browser click e0 --snapshot-after             # act by ref or CSS selector
+ultrastealth browser type e3 --text "user@example.com"
+ultrastealth daemon status        # running / socket / pid
+ultrastealth daemon stop
+```
+
+**Snapshot refs, not screenshots.** `snapshot` returns the accessibility tree with
+stable `eN` refs; actions take a ref (`e2`) or a CSS selector. `--snapshot-after`
+returns the fresh snapshot in the same response. This is the token/latency win
+(the Playwright-MCP model), on real bot-detection-passing Chrome.
+
+**Batch multi-step flows into one call** (also the `browser_batch` MCP tool):
+
+```bash
+ultrastealth browser batch - <<'JSON'
+[{"op":"navigate","url":"https://example.com/login"},
+ {"op":"wait","selector":"#email"},
+ {"op":"fill","target":"#email","text":"user@example.com"},
+ {"op":"click","target":"e7"},
+ {"op":"wait","text":"Welcome"},
+ {"op":"snapshot"}]
+JSON
+```
+
+**From Python** (instant restart, persistent `cf_clearance`):
+
+```python
+from ultrastealth import connect
+us = connect()                                   # starts the daemon once, then reuses it
+await us.call("navigate", url="https://example.com", wait_secs=2.0)
+title = (await us.call("get", kind="title"))["title"]
+```
+
+Environment: `ULTRASTEALTH_IDLE_TIMEOUT` (seconds the browser stays warm after the
+last command; `0` = never close, default `1800`), `ULTRASTEALTH_DAEMON_DIR` (where
+the socket/pid/log live; the socket auto-relocates to a short temp path if this
+dir would exceed the OS's Unix-socket length limit). Profile selection uses the
+same `ULTRASTEALTH_RUNNER` / `_USER_DATA_DIR` / `_PROFILE_DIRECTORY` as the rest of
+the stack. The stealth/bypass launch path is unchanged — the daemon-driven browser
+passes the same bot checks as `UltrastealthFetcher`.
+
+See the bundled `fast-browser` skill (`skills/fast-browser/`) for the agent
+playbook and full command reference.
+
 ## MCP Server for Claude Code
 
 The ultrastealth MCP server exposes the stealth browser as tools for Claude Code, giving it the ability to navigate, click, type, screenshot, and monitor network traffic — all with maximum anti-detection.
@@ -120,7 +177,9 @@ The server runs as an HTTP service (streamable-http transport) on port **8090** 
 
 ### Available Tools
 
-**Browser automation:** `browser_navigate`, `browser_click`, `browser_type`, `browser_get_state`, `browser_screenshot`, `browser_scroll`, `browser_go_back`, `browser_evaluate`, `browser_press_key`, `browser_get_html`, `browser_get`, `browser_is`, `browser_wait`, `browser_hover`, `browser_focus`, `browser_scroll_into_view`, `browser_select_option`, `browser_add_init_script`, `browser_add_script`, `browser_add_style`, `browser_close`
+**Browser automation:** `browser_navigate`, `browser_snapshot` (stable `eN` refs), `browser_batch` (many steps, one call), `browser_click`, `browser_type`, `browser_get_state`, `browser_screenshot`, `browser_scroll`, `browser_go_back`, `browser_evaluate`, `browser_press_key`, `browser_get_html`, `browser_get`, `browser_is`, `browser_wait`, `browser_hover`, `browser_focus`, `browser_scroll_into_view`, `browser_select_option`, `browser_add_init_script`, `browser_add_script`, `browser_add_style`, `browser_close`
+
+When the warm daemon is running, these MCP tools drive the **same** browser as the `ultrastealth` CLI. Set `ULTRASTEALTH_MCP_NO_DAEMON=1` to make the MCP server own a private browser instead.
 
 **Tab management:** `browser_new_tab`, `browser_list_tabs`, `browser_switch_tab`, `browser_close_tab`
 
