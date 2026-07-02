@@ -35,6 +35,31 @@ Methods you'll use:
 - `solve_cloudflare=True` is harmless when there's no challenge — leave it on for
   protected targets.
 
+## Fast path — attach to the warm daemon (no cold start)
+
+For the common **navigate → wait → evaluate-extract** flow, attach to the warm
+Ultrastealth daemon instead of cold-launching a browser every run. The first run
+starts the daemon (once); every later run reuses the already-open Chrome, so
+startup drops from seconds to milliseconds:
+
+```python
+from ultrastealth import connect
+
+us = connect()                       # starts the daemon once, then reuses it
+await us.call("navigate", url=START_URL, wait_secs=2.0)
+await us.call("wait", selector="[data-product]", timeout_ms=15000)
+rows = (await us.call("evaluate", javascript=EXTRACT))["result"]
+```
+
+Persistent `cf_clearance`/cookies live in the daemon's profile, so protected
+targets stay solved across runs. Multi-step flows can go in one round-trip via
+`await us.call("batch", steps=[...])`. Use this whenever you do **not** need a raw
+Playwright `page` object.
+
+Keep the `UltrastealthFetcher` + `page_action` path (above) only when the task
+needs real interaction on a single live page (multi-step clicks/forms) that the
+RPC ops can't express, or a residential-IP Turnstile solve.
+
 ## Rules that keep Path B scripts working
 - **Extract with `page.evaluate(...)`**, never `page.content()` (can hang on SPAs).
 - **Wait for a selector**, never `network_idle=True` (deadlocks the pool).

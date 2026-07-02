@@ -25,6 +25,24 @@ import asyncio
 import json
 from ultrastealth import UltrastealthFetcher  # `pipx install git+https://github.com/anusoft/ultrastealth.git`
 
+# ── Fast alternative: attach to the warm daemon (no cold Chrome start) ──────────
+# For a plain navigate → wait → evaluate-extract flow, prefer connecting to the
+# always-warm Ultrastealth daemon: the first run starts it once, later runs reuse
+# the open browser (startup: seconds → milliseconds) and keep cf_clearance/cookies.
+# Use this INSTEAD of UltrastealthFetcher when you don't need a raw Playwright page:
+#
+#     from ultrastealth import connect
+#     async def scrape_fast(query="<default>", pages=1):
+#         us = connect()                       # starts daemon once, then reuses
+#         await us.call("navigate", url=START_URL, wait_secs=2.0)
+#         await us.call("wait", selector="[data-product]", timeout_ms=15000)
+#         return (await us.call("evaluate", javascript=EXTRACT))["result"]
+#
+# Multi-step in one round-trip: await us.call("batch", steps=[{...}, {...}]).
+# Keep the UltrastealthFetcher + page_action path below for real interaction
+# (multi-step clicks/forms) or residential-IP Turnstile solves.
+# ───────────────────────────────────────────────────────────────────────────────
+
 START_URL = "https://site/search"
 
 # JS that runs IN the page and returns plain data. Keep extraction in evaluate
