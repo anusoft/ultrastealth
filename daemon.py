@@ -18,6 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import browser_core
+# Socket/pid/log paths are shared with the client so both derive the identical
+# (length-safe) socket path from ULTRASTEALTH_DAEMON_DIR.
+from client import daemon_dir, sock_path, pid_path, log_path  # noqa: F401
 
 # Command registry: op name -> coroutine.
 COMMANDS = dict(browser_core.OPS)
@@ -53,25 +56,7 @@ async def dispatch(request: dict) -> dict:
         return {"id": req_id, "ok": False, "error": {"type": "error", "message": str(e)}}
 
 
-# ── Lifecycle files ─────────────────────────────────────────────────
-def daemon_dir() -> Path:
-    d = Path(os.environ.get("ULTRASTEALTH_DAEMON_DIR", str(Path.home() / ".ultrastealth")))
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def sock_path() -> str:
-    return str(daemon_dir() / "daemon.sock")
-
-
-def pid_path() -> Path:
-    return daemon_dir() / "daemon.pid"
-
-
-def log_path() -> Path:
-    return daemon_dir() / "daemon.log"
-
-
+# ── Lifecycle (paths imported from client) ──────────────────────────
 def read_pid() -> int | None:
     p = pid_path()
     if not p.exists():
