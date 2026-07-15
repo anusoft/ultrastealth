@@ -1,0 +1,32 @@
+[Unit]
+Description=Run the next due shopping marketplace crawl
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=shopping
+Group=shopping
+WorkingDirectory=/shopping/app
+Environment=HOME=/var/lib/shopping
+Environment=SHOPPING_ROOT=/shopping
+Environment=SHOPPING_APP_ROOT=/shopping/app
+Environment=SHOPPING_BUN=/var/lib/shopping/.bun/bin/bun
+Environment=SHOPPING_DATABASE_URL=dbname=shopping host=/var/run/postgresql
+ExecStart=/shopping/app/.venv/bin/python -m shopping_app.cli schedule
+TimeoutStartSec=infinity
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/shopping/app
+ReadWritePaths=/shopping/data /shopping/partial /shopping/exports /shopping/logs /shopping/state
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+{
+  "name": "shopping-crawlers",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "scrapling-js": "github:anusoft/scrapling-js",
+    "wreq-js": "2.3.1"
+  }
+}

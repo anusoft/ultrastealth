@@ -1,0 +1,610 @@
+{
+  "advice": {
+    "slug": "advice",
+    "entrypoint": "out/advice/advice.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 1,
+    "enabled": true
+  },
+  "allonline": {
+    "slug": "allonline",
+    "entrypoint": "out/allonline/allonline.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 2,
+    "enabled": true
+  },
+  "b2s": {
+    "slug": "b2s",
+    "entrypoint": "out/b2s/b2s.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 3,
+    "enabled": true
+  },
+  "bigc": {
+    "slug": "bigc",
+    "entrypoint": "out/bigc/bigc.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 4,
+    "enabled": true
+  },
+  "bnbhome": {
+    "slug": "bnbhome",
+    "entrypoint": "out/bnbhome/bnbhome.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 5,
+    "enabled": true
+  },
+  "boots": {
+    "slug": "boots",
+    "entrypoint": "out/boots/boots.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--review-page-limit",
+      "1",
+      "--review-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--review-page-limit",
+      "0",
+      "--review-limit",
+      "all",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 6,
+    "enabled": true
+  },
+  "central": {
+    "slug": "central",
+    "entrypoint": "out/central/central.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 7,
+    "enabled": true
+  },
+  "dohome": {
+    "slug": "dohome",
+    "entrypoint": "out/dohome/dohome.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 8,
+    "enabled": true
+  },
+  "globalhouse": {
+    "slug": "globalhouse",
+    "entrypoint": "out/globalhouse/globalhouse.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 9,
+    "enabled": true
+  },
+  "gourmetmarket": {
+    "slug": "gourmetmarket",
+    "entrypoint": "out/gourmetmarket/gourmetmarket.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 10,
+    "enabled": true
+  },
+  "ihavecpu": {
+    "slug": "ihavecpu",
+    "entrypoint": "out/ihavecpu/ihavecpu.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 11,
+    "enabled": true
+  },
+  "jib": {
+    "slug": "jib",
+    "entrypoint": "out/jib/jib.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 12,
+    "enabled": true
+  },
+  "lotuss": {
+    "slug": "lotuss",
+    "entrypoint": "out/lotuss/lotuss.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 13,
+    "enabled": true
+  },
+  "makro": {
+    "slug": "makro",
+    "entrypoint": "out/makro/makro.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 14,
+    "enabled": true
+  },
+  "ofm": {
+    "slug": "ofm",
+    "entrypoint": "out/ofm/ofm.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 15,
+    "enabled": true
+  },
+  "powerbuy": {
+    "slug": "powerbuy",
+    "entrypoint": "out/powerbuy/powerbuy.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--review-page-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--review-page-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 16,
+    "enabled": true
+  },
+  "supersports": {
+    "slug": "supersports",
+    "entrypoint": "out/supersports/supersports.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 17,
+    "enabled": true
+  },
+  "thaiwatsadu": {
+    "slug": "thaiwatsadu",
+    "entrypoint": "out/thaiwatsadu/thaiwatsadu.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 18,
+    "enabled": true
+  },
+  "tops": {
+    "slug": "tops",
+    "entrypoint": "out/tops/tops.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 19,
+    "enabled": true
+  },
+  "villamarket": {
+    "slug": "villamarket",
+    "entrypoint": "out/villamarket/villamarket.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 20,
+    "enabled": true
+  },
+  "watsons": {
+    "slug": "watsons",
+    "entrypoint": "out/watsons/watsons.mjs",
+    "smoke_args": [
+      "--category-limit",
+      "1",
+      "--page-limit",
+      "1",
+      "--product-limit",
+      "1",
+      "--review-page-limit",
+      "1",
+      "--review-limit",
+      "1",
+      "--delay",
+      "100"
+    ],
+    "full_args": [
+      "--category-limit",
+      "0",
+      "--page-limit",
+      "0",
+      "--product-limit",
+      "0",
+      "--review-page-limit",
+      "0",
+      "--review-limit",
+      "0",
+      "--delay",
+      "500",
+      "--resume"
+    ],
+    "interval_seconds": 604800,
+    "priority": 21,
+    "enabled": true
+  }
+}
