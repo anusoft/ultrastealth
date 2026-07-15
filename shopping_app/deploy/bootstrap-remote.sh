@@ -19,16 +19,29 @@ install -d -o root -g shopping -m 0750 "${SHOPPING_ROOT}/imports"
 
 if [[ ! -x "${BUN}" ]]; then
   runuser -u shopping -- env HOME="${SHOPPING_HOME}" \
-    bash -c 'curl -fsSL https://bun.sh/install | bash'
+    bash -c 'curl -fsSL https://bun.sh/install | bash -s -- bun-v1.3.14'
 fi
 
 install -o root -g root -m 0644 \
   "${APP_ROOT}/shopping_app/deploy/package.json" "${APP_ROOT}/package.json"
-env HOME="${SHOPPING_HOME}" "${BUN}" install \
-  --cwd "${APP_ROOT}" --production --no-progress
+install -o root -g root -m 0644 \
+  "${APP_ROOT}/shopping_app/deploy/bun.lock" "${APP_ROOT}/bun.lock"
+install -d -o shopping -g shopping -m 0755 "${APP_ROOT}/node_modules"
+chown -R shopping:shopping "${APP_ROOT}/node_modules"
+runuser -u shopping -- env HOME="${SHOPPING_HOME}" \
+  PATH="${SHOPPING_HOME}/.bun/bin:${PATH}" "${BUN}" install \
+  --cwd "${APP_ROOT}" --production --no-progress --frozen-lockfile
+runuser -u shopping -- env HOME="${SHOPPING_HOME}" \
+  PATH="${SHOPPING_HOME}/.bun/bin:${PATH}" "${BUN}" run \
+  --cwd "${APP_ROOT}/node_modules/scrapling-js" build
 
 apt-get update
-apt-get install -y python3-venv
+apt-get install -y python3-venv zstd
+if ! command -v pg_dump >/dev/null 2>&1; then
+  apt-get install -y postgresql-client-17
+fi
+zstd --version
+pg_dump --version | grep -E '^pg_dump \(PostgreSQL\) 17\.'
 python3 -m venv "${APP_ROOT}/.venv"
 "${APP_ROOT}/.venv/bin/python" -m pip install --disable-pip-version-check \
   --requirement "${APP_ROOT}/shopping_app/requirements.txt"
@@ -72,6 +85,10 @@ install -o root -g root -m 0644 \
 chown -R root:root "${APP_ROOT}"
 chmod -R go-w "${APP_ROOT}"
 systemctl daemon-reload
+
+cd "${APP_ROOT}"
+runuser -u shopping -- env HOME="${SHOPPING_HOME}" \
+  "${BUN}" -e 'await import("scrapling-js")'
 
 runuser -u shopping -- env \
   PYTHONPATH="${APP_ROOT}" \

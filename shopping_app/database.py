@@ -58,7 +58,12 @@ def create_run(
             id, marketplace_id, mode, state, host, command_args, output_path
         )
         VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT (id) DO UPDATE
+        SET mode = EXCLUDED.mode,
+            state = EXCLUDED.state,
+            host = EXCLUDED.host,
+            command_args = EXCLUDED.command_args,
+            output_path = EXCLUDED.output_path
         """,
         (
             identifier,
@@ -129,6 +134,10 @@ def record_error(
             retryable, detail
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+        ON CONFLICT (run_id, stage, relative_path, source_key) DO UPDATE
+        SET marketplace_id = EXCLUDED.marketplace_id,
+            retryable = EXCLUDED.retryable,
+            detail = EXCLUDED.detail
         """,
         (
             run_id,
@@ -171,6 +180,8 @@ def import_document(
     source_key = Path(relative_path).stem
     if kind == "product":
         try:
+            if not isinstance(payload, dict):
+                raise ValueError("product payload must be a JSON object")
             projection = product_projection(payload)
             source_key = projection["source_product_id"]
         except ValueError as exc:
@@ -196,8 +207,7 @@ def import_document(
         ON CONFLICT (run_id, relative_path) DO UPDATE
         SET document_kind = EXCLUDED.document_kind,
             source_key = EXCLUDED.source_key,
-            content_sha256 = EXCLUDED.content_sha256,
-            captured_at = now()
+            content_sha256 = EXCLUDED.content_sha256
         RETURNING id
         """,
         (run_id, source_id, kind, relative_path, source_key, digest),
@@ -253,6 +263,8 @@ def import_document(
             review_count = EXCLUDED.review_count,
             projection = EXCLUDED.projection,
             last_seen_at = now()
+        WHERE shopping.products_current.latest_document_id
+              <= EXCLUDED.latest_document_id
         """,
         (
             source_id,
@@ -305,25 +317,27 @@ def import_directory(
     """Import every JSON file below a run directory in stable order."""
     counters = {"documents": 0, "products": 0, "errors": 0}
     for path in sorted(root.rglob("*.json")):
-        result = import_document(
-            connection,
-            run_id,
-            slug,
-            path.relative_to(root).as_posix(),
-            path.read_bytes(),
-        )
+        with connection.transaction():
+            result = import_document(
+                connection,
+                run_id,
+                slug,
+                path.relative_to(root).as_posix(),
+                path.read_bytes(),
+            )
         counters["documents"] += 1
         if result.get("projected"):
             counters["products"] += 1
         if result.get("error"):
             counters["errors"] += 1
-    set_run_state(
-        connection,
-        run_id,
-        "imported" if counters["errors"] == 0 else "succeeded",
-        counters=counters,
-        output_path=str(root),
-    )
+    with connection.transaction():
+        set_run_state(
+            connection,
+            run_id,
+            "imported" if counters["errors"] == 0 else "succeeded",
+            counters=counters,
+            output_path=str(root),
+        )
     return counters
 
 
@@ -372,13 +386,50 @@ def schedule_failure(connection: Any, slug: str) -> None:
 
 def health_snapshot(connection: Any) -> dict[str, Any]:
     """Return counts used by the operational health command."""
-    return {
+    due_marketplaces = [
+        str(row[0])
+        for row in connection.execute(
+            """
+            SELECT slug FROM shopping.marketplaces
+            WHERE enabled AND next_crawl_at <= now()
+            ORDER BY priority, next_crawl_at, slug
+            """
+        ).fetchall()
+    ]
+    last_success = connection.execute(
+        """
+        SELECT m.slug, r.id, r.mode, r.imported_at
+        FROM shopping.crawl_runs r
+        JOIN shopping.marketplaces m ON m.id = r.marketplace_id
+        WHERE r.state = 'imported'
+        ORDER BY r.imported_at DESC NULLS LAST
+        LIMIT 1
+        """
+    ).fetchone()
+    last_failure = connection.execute(
+        """
+        SELECT m.slug, r.id, r.mode, r.finished_at, r.error
+        FROM shopping.crawl_runs r
+        JOIN shopping.marketplaces m ON m.id = r.marketplace_id
+        WHERE r.state = 'failed'
+        ORDER BY r.finished_at DESC NULLS LAST
+        LIMIT 1
+        """
+    ).fetchone()
+    export_watermarks = connection.execute(
+        """
+        SELECT COALESCE(max(upper_document_id), 0),
+               COALESCE(max(upper_revision_id), 0)
+        FROM shopping.export_batches
+        WHERE batch_type = 'incremental' AND state = 'complete'
+        """
+    ).fetchone()
+    snapshot = {
         "marketplaces": connection.execute(
             "SELECT count(*) FROM shopping.marketplaces"
         ).fetchone()[0],
-        "due": connection.execute(
-            "SELECT count(*) FROM shopping.marketplaces WHERE enabled AND next_crawl_at <= now()"
-        ).fetchone()[0],
+        "due": len(due_marketplaces),
+        "due_marketplaces": due_marketplaces,
         "running": connection.execute(
             "SELECT count(*) FROM shopping.crawl_runs WHERE state = 'running'"
         ).fetchone()[0],
@@ -391,4 +442,30 @@ def health_snapshot(connection: Any) -> dict[str, Any]:
         "errors": connection.execute(
             "SELECT count(*) FROM shopping.crawl_errors"
         ).fetchone()[0],
+        "last_success": (
+            {
+                "site": last_success[0],
+                "run_id": last_success[1],
+                "mode": last_success[2],
+                "at": last_success[3],
+            }
+            if last_success
+            else None
+        ),
+        "last_failure": (
+            {
+                "site": last_failure[0],
+                "run_id": last_failure[1],
+                "mode": last_failure[2],
+                "at": last_failure[3],
+                "error": last_failure[4],
+            }
+            if last_failure
+            else None
+        ),
+        "export_watermarks": {
+            "document_id": int(export_watermarks[0]),
+            "revision_id": int(export_watermarks[1]),
+        },
     }
+    return snapshot

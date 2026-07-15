@@ -530,7 +530,7 @@ Expected: existing tests and new shopping tests pass.
 
 Run: `find out/craft -path '*-products/out/*' -type f ! -name .DS_Store -print0 | sort -z | xargs -0 shasum -a 256 > /tmp/shopping-initial.sha256`
 
-Expected: 296 manifest lines before deployment.
+Expected: 295 manifest lines before deployment after excluding `.DS_Store`.
 
 - [ ] **Step 2: Copy application and crawler files without unrelated worktree files**
 
@@ -560,19 +560,19 @@ Expected: application files are root-owned, runtime paths are shopping-owned, Po
 
 Run: `ssh hetzner-anu 'sudo find /shopping/imports/initial -type f ! -name .DS_Store -print0 | sudo sort -z | sudo xargs -0 sha256sum'`
 
-Expected: 296 paths and no missing files.
+Expected: 295 paths and no missing files.
 
 - [ ] **Step 2: Compare normalized local and remote checksums**
 
 Rewrite only the known local and remote prefixes before comparison.
 
-Expected: zero checksum differences and total byte count `86000036`.
+Expected: zero checksum differences and total byte count `85991840`.
 
 - [ ] **Step 3: Import each marketplace directory**
 
 Run: `ssh hetzner-anu 'for site in advice allonline b2s bigc bnbhome boots central dohome globalhouse gourmetmarket ihavecpu jib lotuss makro ofm powerbuy supersports thaiwatsadu tops villamarket watsons; do sudo -u shopping /shopping/app/.venv/bin/python -m shopping_app.cli ingest --site "$site" --path "/shopping/imports/initial/$site" --mode initial; done'`
 
-Expected: all 296 JSON files import or produce a path-specific JSON error; no file disappears.
+Expected: all 295 JSON files import or produce a path-specific JSON error; no file disappears.
 
 - [ ] **Step 4: Repeat import and reconcile idempotency**
 
@@ -630,7 +630,7 @@ Expected: the timer is active, the scheduler starts one full run, and a second s
 
 - [ ] **Step 3: Create and verify a baseline export**
 
-Run: `ssh hetzner-anu 'sudo -u shopping /shopping/app/.venv/bin/python -m shopping_app.cli export-baseline'`
+Run: `ssh hetzner-anu 'sudo -u shopping bash -lc "cd /shopping/app && .venv/bin/python -m shopping_app.cli export-baseline"'`
 
 Expected: a custom-format dump, manifest, and SHA-256 exist under `/shopping/exports/baseline`.
 
@@ -642,7 +642,7 @@ Expected: all table counts match the source database.
 
 - [ ] **Step 5: Create and repeat an incremental export**
 
-Run: `ssh hetzner-anu 'sudo -u shopping /shopping/app/.venv/bin/python -m shopping_app.cli export-incremental'` twice.
+Run: `ssh hetzner-anu 'sudo -u shopping bash -lc "cd /shopping/app && .venv/bin/python -m shopping_app.cli export-incremental"'` twice.
 
 Expected: the first bundle contains records above the prior watermark; the second reports no new rows or emits an empty verified bundle without changing the completed watermark.
 

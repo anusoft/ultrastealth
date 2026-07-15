@@ -21,7 +21,7 @@ The work is complete when all these conditions hold:
 
 1. `/shopping` contains the application, migrations, raw data, logs, exports, and deployment manifests.
 2. PostgreSQL 17 contains a new `shopping` database with versioned migrations and seeds for all 21 marketplaces.
-3. The initial 296 marketplace artifact files, totaling 86,000,036 bytes, exist on Hetzner with matching Secure Hash Algorithm 256-bit (SHA-256) digests and database records.
+3. The initial 295 marketplace artifact files, totaling 85,991,840 bytes, exist on Hetzner with matching Secure Hash Algorithm 256-bit (SHA-256) digests and database records.
 4. Every crawler passes syntax, help, smoke, persistence, and resume checks on Hetzner.
 5. A systemd scheduler can queue and run full catalog crawls without overlapping the same marketplace.
 6. A failed or interrupted crawl retains its partial files and checkpoint for the next run.
@@ -172,7 +172,7 @@ The initial rollout queues all marketplaces but processes them sequentially. Thi
 
 ## Initial transfer and ingestion
 
-The initial migration copies 296 files and verifies every SHA-256 before ingestion. The transfer also creates a source manifest that records the local path, remote path, byte count, and digest.
+The initial migration copies 295 files and verifies every SHA-256 before ingestion. The transfer also creates a source manifest that records the local path, remote path, byte count, and digest.
 
 The importer treats each existing artifact directory as an imported historical run. It derives the marketplace from the path, records the original relative path, and preserves any existing run summary or metadata.
 
@@ -248,7 +248,7 @@ Where an endpoint exposes a total count, the full crawler must reconcile written
 
 ### Transfer checks
 
-The initial transfer passes only when local and remote manifests contain the same 296 relative paths, byte counts, and SHA-256 values. Database queries must then reconcile document counts with the imported manifest and report projection exceptions separately.
+The initial transfer passes only when local and remote manifests contain the same 295 relative paths, byte counts, and SHA-256 values. Database queries must then reconcile document counts with the imported manifest and report projection exceptions separately.
 
 ### Operational checks
 

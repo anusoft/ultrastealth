@@ -29,7 +29,4 @@ VALUES
     ('watsons', 'Watsons', 604800, 21, true)
 ON CONFLICT (slug) DO UPDATE
 SET display_name = EXCLUDED.display_name,
-    crawl_interval_seconds = EXCLUDED.crawl_interval_seconds,
-    priority = EXCLUDED.priority,
-    enabled = EXCLUDED.enabled,
     updated_at = now();

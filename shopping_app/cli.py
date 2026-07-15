@@ -6,7 +6,10 @@ import argparse
 import json
 import os
 import shutil
+import socket
+import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from .database import (
@@ -73,6 +76,47 @@ def _print(value) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
 
 
+def initial_run_id(site: str, root: Path) -> str:
+    """Return the repeatable run ID used for one historical import directory."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"shopping-initial:{site}:{root}"))
+
+
+def active_lock_names(root: Path) -> list[str]:
+    """Return local lock names whose recorded processes still exist."""
+    active = []
+    for path in sorted((root / "state" / "locks").glob("*.lock")):
+        try:
+            fields = dict(
+                part.split("=", 1)
+                for part in path.read_text(encoding="utf-8").split()
+                if "=" in part
+            )
+            if fields.get("host") != socket.gethostname():
+                continue
+            os.kill(int(fields["pid"]), 0)
+        except (FileNotFoundError, KeyError, ValueError, ProcessLookupError):
+            continue
+        except PermissionError:
+            pass
+        active.append(path.stem)
+    return active
+
+
+def systemd_state(unit: str) -> str:
+    """Read a unit state without making health depend on systemd."""
+    try:
+        completed = subprocess.run(
+            ["systemctl", "is-active", unit],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "unavailable"
+    return completed.stdout.strip() or "unknown"
+
+
 def command_migrate() -> int:
     with connect() as connection:
         installed = apply_migrations(connection)
@@ -85,17 +129,20 @@ def command_ingest(args: argparse.Namespace) -> int:
     root = Path(args.path).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"ingest directory not found: {root}")
+    run_id = args.run_id
+    if run_id is None and args.mode == "initial":
+        run_id = initial_run_id(args.site, root)
     with connect() as connection:
         run_id = create_run(
             connection,
             args.site,
             args.mode,
             str(root),
-            run_id=args.run_id,
+            run_id=run_id,
             state="succeeded",
         )
-        counters = import_directory(connection, run_id, args.site, root)
         connection.commit()
+        counters = import_directory(connection, run_id, args.site, root)
     _print({"run_id": run_id, "site": args.site, **counters})
     return 0 if counters["errors"] == 0 else 2
 
@@ -145,6 +192,11 @@ def command_health() -> int:
     root, _, _ = _paths()
     with connect() as connection:
         snapshot = health_snapshot(connection)
+    snapshot["scheduler"] = {
+        "timer": systemd_state("shopping-scheduler.timer"),
+        "service": systemd_state("shopping-scheduler.service"),
+    }
+    snapshot["active_locks"] = active_lock_names(root)
     usage = shutil.disk_usage(root)
     snapshot["disk"] = {
         "total_bytes": usage.total,

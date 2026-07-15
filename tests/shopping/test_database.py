@@ -1,9 +1,10 @@
 import json
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from shopping_app.database import import_directory, import_document
+from shopping_app.database import create_run, import_directory, import_document
 
 
 class FakeResult:
@@ -21,6 +22,12 @@ class FakeResult:
 class FakeConnection:
     def __init__(self):
         self.calls = []
+        self.transaction_count = 0
+
+    @contextmanager
+    def transaction(self):
+        self.transaction_count += 1
+        yield
 
     def execute(self, sql, params=None):
         normalized = " ".join(sql.split())
@@ -33,6 +40,26 @@ class FakeConnection:
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_resumed_run_refreshes_mode_command_and_output_metadata(self):
+        connection = FakeConnection()
+
+        create_run(
+            connection,
+            "bigc",
+            "full",
+            "/shopping/partial/bigc/current",
+            command_args=["bun", "bigc.mjs", "--resume"],
+            run_id="00000000-0000-0000-0000-000000000001",
+        )
+
+        statement = next(
+            sql for sql, _ in connection.calls if "INSERT INTO shopping.crawl_runs" in sql
+        )
+        self.assertIn("ON CONFLICT (id) DO UPDATE", statement)
+        self.assertIn("mode = EXCLUDED.mode", statement)
+        self.assertIn("command_args = EXCLUDED.command_args", statement)
+        self.assertIn("output_path = EXCLUDED.output_path", statement)
+
     def test_product_import_stores_blob_document_projection_and_revision(self):
         connection = FakeConnection()
         content = json.dumps(
@@ -56,6 +83,10 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("INSERT INTO shopping.crawl_documents", statements)
         self.assertIn("INSERT INTO shopping.products_current", statements)
         self.assertIn("INSERT INTO shopping.product_revisions", statements)
+        self.assertIn(
+            "products_current.latest_document_id <= EXCLUDED.latest_document_id",
+            statements,
+        )
         self.assertEqual(result["document_id"], 101)
         self.assertTrue(result["projected"])
 
@@ -88,7 +119,28 @@ class DatabaseTests(unittest.TestCase):
 
         statements = "\n".join(sql for sql, _ in connection.calls)
         self.assertIn("INSERT INTO shopping.crawl_errors", statements)
+        self.assertIn(
+            "ON CONFLICT (run_id, stage, relative_path, source_key) DO UPDATE",
+            statements,
+        )
         self.assertFalse(result["projected"])
+        self.assertEqual(result["error"], "missing_product_identity")
+
+    def test_non_object_product_json_is_retained_as_projection_error(self):
+        connection = FakeConnection()
+
+        result = import_document(
+            connection,
+            "00000000-0000-0000-0000-000000000001",
+            "advice",
+            "products/array.json",
+            b"[]",
+        )
+
+        statements = "\n".join(sql for sql, _ in connection.calls)
+        self.assertIn("INSERT INTO shopping.document_blobs", statements)
+        self.assertIn("INSERT INTO shopping.crawl_documents", statements)
+        self.assertIn("INSERT INTO shopping.crawl_errors", statements)
         self.assertEqual(result["error"], "missing_product_identity")
 
     def test_directory_import_walks_json_in_stable_order(self):
@@ -118,6 +170,12 @@ class DatabaseTests(unittest.TestCase):
             [params[3] for params in document_calls],
             ["products/a.json", "products/b.json"],
         )
+        self.assertEqual(connection.transaction_count, 3)
+
+        document_statement = next(
+            sql for sql, _ in connection.calls if "INSERT INTO shopping.crawl_documents" in sql
+        )
+        self.assertNotIn("captured_at = now()", document_statement)
 
 
 if __name__ == "__main__":
