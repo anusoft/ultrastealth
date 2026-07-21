@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SHOPPING_ROOT=${SHOPPING_ROOT:-/shopping}
+SHOPPING_ROOT=${SHOPPING_ROOT:-/home/anu/shopping}
 APP_ROOT=${SHOPPING_APP_ROOT:-${SHOPPING_ROOT}/app}
 SHOPPING_HOME=/var/lib/shopping
 BUN=${SHOPPING_HOME}/.bun/bin/bun
@@ -9,6 +9,16 @@ BUN=${SHOPPING_HOME}/.bun/bin/bun
 if ! id shopping >/dev/null 2>&1; then
   useradd --system --create-home --home-dir "${SHOPPING_HOME}" \
     --shell /usr/sbin/nologin shopping
+fi
+
+apt-get update
+apt-get install -y acl python3-venv zstd
+if ! command -v pg_dump >/dev/null 2>&1; then
+  apt-get install -y postgresql-client-17
+fi
+
+if [[ "${SHOPPING_ROOT}" == /home/* ]]; then
+  setfacl -m u:shopping:--x "$(dirname "${SHOPPING_ROOT}")"
 fi
 
 install -d -o root -g root -m 0755 "${SHOPPING_ROOT}" "${APP_ROOT}"
@@ -35,11 +45,6 @@ runuser -u shopping -- env HOME="${SHOPPING_HOME}" \
   PATH="${SHOPPING_HOME}/.bun/bin:${PATH}" "${BUN}" run \
   --cwd "${APP_ROOT}/node_modules/scrapling-js" build
 
-apt-get update
-apt-get install -y python3-venv zstd
-if ! command -v pg_dump >/dev/null 2>&1; then
-  apt-get install -y postgresql-client-17
-fi
 zstd --version
 pg_dump --version | grep -E '^pg_dump \(PostgreSQL\) 17\.'
 python3 -m venv "${APP_ROOT}/.venv"

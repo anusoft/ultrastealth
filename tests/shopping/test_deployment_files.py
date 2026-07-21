@@ -15,17 +15,28 @@ class DeploymentFileTests(unittest.TestCase):
                 self.assertIn("Group=shopping", text)
                 self.assertIn("NoNewPrivileges=true", text)
                 self.assertIn("ProtectSystem=strict", text)
-                self.assertIn("ReadWritePaths=/shopping\n", text)
+                self.assertIn("ProtectHome=read-only", text)
+                self.assertIn("ReadWritePaths=/home/anu/shopping\n", text)
+                self.assertIn("ReadOnlyPaths=/home/anu/shopping/app\n", text)
 
     def test_services_keep_partial_and_final_data_on_one_writable_mount(self):
         for name in ("shopping-scheduler.service", "shopping-crawl@.service"):
             with self.subTest(name=name):
                 text = (SYSTEMD_ROOT / name).read_text()
-                self.assertIn("ReadWritePaths=/shopping\n", text)
+                self.assertIn("ReadWritePaths=/home/anu/shopping\n", text)
                 self.assertNotIn(
-                    "ReadWritePaths=/shopping/data /shopping/partial",
+                    "ReadWritePaths=/home/anu/shopping/data /home/anu/shopping/partial",
                     text,
                 )
+
+    def test_services_use_anu_home_as_canonical_root(self):
+        for name in ("shopping-scheduler.service", "shopping-crawl@.service"):
+            with self.subTest(name=name):
+                text = (SYSTEMD_ROOT / name).read_text()
+                self.assertIn("WorkingDirectory=/home/anu/shopping/app", text)
+                self.assertIn("Environment=SHOPPING_ROOT=/home/anu/shopping", text)
+                self.assertIn("Environment=SHOPPING_APP_ROOT=/home/anu/shopping/app", text)
+                self.assertIn("ExecStart=/home/anu/shopping/app/.venv/bin/python", text)
 
     def test_scheduler_timer_runs_every_fifteen_minutes(self):
         text = (SYSTEMD_ROOT / "shopping-scheduler.timer").read_text()
@@ -49,6 +60,8 @@ class DeploymentFileTests(unittest.TestCase):
     def test_bootstrap_creates_peer_matched_role_and_database(self):
         text = Path("shopping_app/deploy/bootstrap-remote.sh").read_text()
 
+        self.assertIn("SHOPPING_ROOT=${SHOPPING_ROOT:-/home/anu/shopping}", text)
+        self.assertIn('setfacl -m u:shopping:--x "$(dirname "${SHOPPING_ROOT}")"', text)
         self.assertIn("CREATE ROLE shopping LOGIN", text)
         self.assertIn("CREATE ROLE shopping_owner NOLOGIN", text)
         self.assertIn("createdb --owner=shopping_owner shopping", text)

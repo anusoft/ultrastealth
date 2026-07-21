@@ -3,11 +3,23 @@ import os
 import socket
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from shopping_app.cli import active_lock_names, build_parser, initial_run_id
+from shopping_app.cli import _paths, active_lock_names, build_parser, initial_run_id
 
 
 class CliTests(unittest.TestCase):
+    def test_default_deployment_paths_use_anu_home(self):
+        with patch.dict(
+            os.environ,
+            {},
+            clear=True,
+        ):
+            root, app_root, _ = _paths()
+
+        self.assertEqual(root, Path("/home/anu/shopping"))
+        self.assertEqual(app_root, Path("/home/anu/shopping/app"))
+
     def test_crawl_command_defaults_to_full_mode(self):
         args = build_parser().parse_args(["crawl", "advice"])
 

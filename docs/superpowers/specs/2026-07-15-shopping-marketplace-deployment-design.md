@@ -1,6 +1,6 @@
 # Deploy marketplace crawlers to Hetzner
 
-This design deploys 21 retail marketplace crawlers to `hetzner-anu:/shopping`. Hetzner becomes the primary crawl store, while lossless files and versioned PostgreSQL exports support later on-premises backfill.
+This design deploys 21 retail marketplace crawlers to `hetzner-anu:/home/anu/shopping`. Hetzner becomes the primary crawl store, while lossless files and versioned PostgreSQL exports support later on-premises backfill.
 
 **Content type:** Conceptual design specification
 
@@ -19,7 +19,7 @@ The deployment must retain every marketplace JavaScript Object Notation (JSON) f
 
 The work is complete when all these conditions hold:
 
-1. `/shopping` contains the application, migrations, raw data, logs, exports, and deployment manifests.
+1. `/home/anu/shopping` contains the application, migrations, raw data, logs, exports, and deployment manifests.
 2. PostgreSQL 17 contains a new `shopping` database with versioned migrations and seeds for all 21 marketplaces.
 3. The initial 295 marketplace artifact files, totaling 85,991,840 bytes, exist on Hetzner with matching Secure Hash Algorithm 256-bit (SHA-256) digests and database records.
 4. Every crawler passes syntax, help, smoke, persistence, and resume checks on Hetzner.
@@ -83,7 +83,7 @@ The deployment uses the existing Ubuntu 24.04 host and PostgreSQL 17 cluster. It
 Database changes use ordered Structured Query Language (SQL) migrations. The target layout is:
 
 ```text
-/shopping/
+/home/anu/shopping/
   app/                 deployed source and Bun dependencies
   app/out/             21 entrypoints and shared crawler runtime
   app/bin/             crawl, ingest, schedule, export, and health commands
@@ -97,6 +97,9 @@ Database changes use ordered Structured Query Language (SQL) migrations. The tar
   logs/                command-level logs not already in the journal
   state/               scheduler locks and generated manifests
 ```
+
+`/shopping` remains a compatibility symlink to the canonical tree so historical
+manifests and database paths continue to resolve during the relocation.
 
 The `shopping` Unix account owns runtime directories and has no interactive shell. Root owns deployed source and systemd unit files. Runtime code receives database access through PostgreSQL peer authentication on the local Unix socket.
 
@@ -117,11 +120,11 @@ The manifest adapts crawler differences without hiding them. A full crawl always
 
 The crawl runner uses an atomic directory lifecycle so operators can distinguish complete data from resumable work.
 
-1. Create or reopen `/shopping/partial/<site>/<run-id>`.
+1. Create or reopen `/home/anu/shopping/partial/<site>/<run-id>`.
 2. Run the crawler with `--resume` and explicit full-catalog flags.
 3. Retain the partial directory when the process exits unsuccessfully.
 4. Write a final run manifest after the crawler succeeds.
-5. Rename the directory to `/shopping/data/<site>/<run-id>` on the same filesystem.
+5. Rename the directory to `/home/anu/shopping/data/<site>/<run-id>` on the same filesystem.
 6. Import every JSON file and mark the run imported only after all files succeed.
 
 The runner never deletes a successful run. A separate retention command may be added later after storage requirements are measured and approved.
@@ -204,8 +207,9 @@ The deployment keeps database and service access local to the host. It does not 
 - A non-login database owner owns schema objects
 - The runtime role can read and write application tables but cannot create roles, databases, or extensions
 - Root applies migrations and installs systemd units
-- `/shopping/app` is root-owned and not writable by the runtime account
-- `/shopping/data`, `/shopping/partial`, `/shopping/logs`, and `/shopping/state` are writable only by the runtime account
+- The `shopping` account receives execute-only ACL traversal through `/home/anu`
+- `/home/anu/shopping/app` is root-owned and not writable by the runtime account
+- `/home/anu/shopping/data`, `/home/anu/shopping/partial`, `/home/anu/shopping/logs`, and `/home/anu/shopping/state` are writable only by the runtime account
 
 Crawler endpoints and public storefront tokens already embedded in the generated source remain deployable artifacts. The deployment does not copy shell history, browser profiles, local environment files, SSH keys, or unrelated repository files.
 

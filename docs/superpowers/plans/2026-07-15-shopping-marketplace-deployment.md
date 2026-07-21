@@ -462,17 +462,19 @@ Expected: `FileNotFoundError` for the systemd unit.
 Type=oneshot
 User=shopping
 Group=shopping
-WorkingDirectory=/shopping/app
-Environment=SHOPPING_ROOT=/shopping
+WorkingDirectory=/home/anu/shopping/app
+Environment=SHOPPING_ROOT=/home/anu/shopping
 Environment=SHOPPING_DATABASE_URL=dbname=shopping host=/var/run/postgresql
-ExecStart=/shopping/app/.venv/bin/python -m shopping_app.cli schedule
+ExecStart=/home/anu/shopping/app/.venv/bin/python -m shopping_app.cli schedule
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/shopping/data /shopping/partial /shopping/exports /shopping/logs /shopping/state
+ProtectHome=read-only
+ReadOnlyPaths=/home/anu/shopping/app
+ReadWritePaths=/home/anu/shopping
 ```
 
-The bootstrap creates the Unix account and directory permissions, installs Bun under `/var/lib/shopping/.bun`, creates `shopping_owner` and `shopping` database roles plus the database, creates the Python virtual environment, installs dependencies, runs migrations as PostgreSQL superuser, installs units, reloads systemd, and leaves the scheduler disabled until smoke validation passes.
+The bootstrap creates the Unix account and directory permissions, grants the runtime account execute-only traversal through `/home/anu`, installs Bun under `/var/lib/shopping/.bun`, creates `shopping_owner` and `shopping` database roles plus the database, creates the Python virtual environment, installs dependencies, runs migrations as PostgreSQL superuser, installs units, reloads systemd, and leaves the scheduler disabled until smoke validation passes.
 
 - [ ] **Step 4: Run deployment file tests and shell syntax check**
 
@@ -521,10 +523,10 @@ Expected: existing tests and new shopping tests pass.
 ### Task 10: Bootstrap Hetzner and transfer exact application data
 
 **Files:**
-- Deploy: `shopping_app/**` to `/shopping/app/shopping_app/**`
-- Deploy: 21 entrypoints and `out/craft/_shared/**` to `/shopping/app/out/**`
-- Transfer: `out/craft/*-products/plan.md` to `/shopping/app/plans/**`
-- Transfer: `out/craft/*-products/out/**` to `/shopping/imports/initial/**`
+- Deploy: `shopping_app/**` to `/home/anu/shopping/app/shopping_app/**`
+- Deploy: 21 entrypoints and `out/craft/_shared/**` to `/home/anu/shopping/app/out/**`
+- Transfer: `out/craft/*-products/plan.md` to `/home/anu/shopping/app/plans/**`
+- Transfer: `out/craft/*-products/out/**` to `/home/anu/shopping/imports/initial/**`
 
 - [ ] **Step 1: Create a local initial-data manifest**
 
@@ -536,29 +538,29 @@ Expected: 295 manifest lines before deployment after excluding `.DS_Store`.
 
 Run exact-path rsync commands for `shopping_app`, the 21 entrypoint directories, `out/craft/_shared`, plans, and initial output directories. Use `--rsync-path='sudo rsync'` and do not use broad repository sync.
 
-Expected: `/shopping/app` and `/shopping/imports/initial` contain only scoped deployment files.
+Expected: `/home/anu/shopping/app` and `/home/anu/shopping/imports/initial` contain only scoped deployment files.
 
 - [ ] **Step 3: Execute the idempotent remote bootstrap**
 
-Run: `ssh hetzner-anu 'sudo bash /shopping/app/shopping_app/deploy/bootstrap-remote.sh'`
+Run: `ssh hetzner-anu 'sudo bash /home/anu/shopping/app/shopping_app/deploy/bootstrap-remote.sh'`
 
 Expected: PostgreSQL database `shopping` exists, migrations and seeds pass, Bun and Python dependencies resolve, and systemd units load but the timer remains disabled.
 
 - [ ] **Step 4: Verify remote application ownership and database isolation**
 
-Run remote checks for `stat /shopping/app`, writable runtime directories, `ss -lntp`, role attributes, database ownership, and grants.
+Run remote checks for `stat /home/anu/shopping/app`, writable runtime directories, `ss -lntp`, role attributes, database ownership, and grants.
 
 Expected: application files are root-owned, runtime paths are shopping-owned, PostgreSQL still listens only on localhost, and the runtime role has no role or database creation privileges.
 
 ### Task 11: Verify transfer and ingest historical artifacts
 
 **Files:**
-- Verify: `/shopping/imports/initial/**`
+- Verify: `/home/anu/shopping/imports/initial/**`
 - Populate: PostgreSQL `shopping` tables
 
 - [ ] **Step 1: Generate the remote checksum manifest**
 
-Run: `ssh hetzner-anu 'sudo find /shopping/imports/initial -type f ! -name .DS_Store -print0 | sudo sort -z | sudo xargs -0 sha256sum'`
+Run: `ssh hetzner-anu 'sudo find /home/anu/shopping/imports/initial -type f ! -name .DS_Store -print0 | sudo sort -z | sudo xargs -0 sha256sum'`
 
 Expected: 295 paths and no missing files.
 
@@ -570,7 +572,7 @@ Expected: zero checksum differences and total byte count `85991840`.
 
 - [ ] **Step 3: Import each marketplace directory**
 
-Run: `ssh hetzner-anu 'for site in advice allonline b2s bigc bnbhome boots central dohome globalhouse gourmetmarket ihavecpu jib lotuss makro ofm powerbuy supersports thaiwatsadu tops villamarket watsons; do sudo -u shopping /shopping/app/.venv/bin/python -m shopping_app.cli ingest --site "$site" --path "/shopping/imports/initial/$site" --mode initial; done'`
+Run: `ssh hetzner-anu 'for site in advice allonline b2s bigc bnbhome boots central dohome globalhouse gourmetmarket ihavecpu jib lotuss makro ofm powerbuy supersports thaiwatsadu tops villamarket watsons; do sudo -u shopping /home/anu/shopping/app/.venv/bin/python -m shopping_app.cli ingest --site "$site" --path "/home/anu/shopping/imports/initial/$site" --mode initial; done'`
 
 Expected: all 295 JSON files import or produce a path-specific JSON error; no file disappears.
 
@@ -583,8 +585,8 @@ Expected: the second pass does not increase document references or unchanged rev
 ### Task 12: Smoke-test every crawler on Hetzner
 
 **Files:**
-- Execute: `/shopping/app/out/<site>/<site>.mjs`
-- Populate: `/shopping/data/<site>/<run-id>` and PostgreSQL
+- Execute: `/home/anu/shopping/app/out/<site>/<site>.mjs`
+- Populate: `/home/anu/shopping/data/<site>/<run-id>` and PostgreSQL
 
 - [ ] **Step 1: Run Bun syntax and help checks for all sites**
 
@@ -614,7 +616,7 @@ Expected: all 21 smoke gates pass or the final report names an external source o
 
 **Files:**
 - Enable: `shopping-scheduler.timer`
-- Create: `/shopping/exports/**`
+- Create: `/home/anu/shopping/exports/**`
 
 - [ ] **Step 1: Queue all enabled marketplaces**
 
@@ -630,9 +632,9 @@ Expected: the timer is active, the scheduler starts one full run, and a second s
 
 - [ ] **Step 3: Create and verify a baseline export**
 
-Run: `ssh hetzner-anu 'sudo -u shopping bash -lc "cd /shopping/app && .venv/bin/python -m shopping_app.cli export-baseline"'`
+Run: `ssh hetzner-anu 'sudo -u shopping bash -lc "cd /home/anu/shopping/app && .venv/bin/python -m shopping_app.cli export-baseline"'`
 
-Expected: a custom-format dump, manifest, and SHA-256 exist under `/shopping/exports/baseline`.
+Expected: a custom-format dump, manifest, and SHA-256 exist under `/home/anu/shopping/exports/baseline`.
 
 - [ ] **Step 4: Restore baseline into a temporary database**
 
@@ -642,7 +644,7 @@ Expected: all table counts match the source database.
 
 - [ ] **Step 5: Create and repeat an incremental export**
 
-Run: `ssh hetzner-anu 'sudo -u shopping bash -lc "cd /shopping/app && .venv/bin/python -m shopping_app.cli export-incremental"'` twice.
+Run: `ssh hetzner-anu 'sudo -u shopping bash -lc "cd /home/anu/shopping/app && .venv/bin/python -m shopping_app.cli export-incremental"'` twice.
 
 Expected: the first bundle contains records above the prior watermark; the second reports no new rows or emits an empty verified bundle without changing the completed watermark.
 

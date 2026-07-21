@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _paths() -> tuple[Path, Path, str]:
-    root = Path(os.environ.get("SHOPPING_ROOT", "/shopping"))
+    root = Path(os.environ.get("SHOPPING_ROOT", "/home/anu/shopping"))
     app_root = Path(os.environ.get("SHOPPING_APP_ROOT", str(root / "app")))
     bun_path = os.environ.get(
         "SHOPPING_BUN",
