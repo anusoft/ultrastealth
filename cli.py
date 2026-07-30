@@ -72,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--attribute")
     iss = b.add_parser("is"); iss.add_argument("kind"); iss.add_argument("target")
     ev = b.add_parser("eval"); ev.add_argument("javascript")
+    b.add_parser("cookies")
+    fnd = b.add_parser("find"); fnd.add_argument("query")
     sh = b.add_parser("screenshot"); sh.add_argument("--out"); sh.add_argument("--full-page", action="store_true")
     ba = b.add_parser("batch"); ba.add_argument("file", help="JSON file of steps, or - for stdin")
     return parser
@@ -128,6 +130,10 @@ def _op_to_call(op: str, args) -> tuple[str, dict]:
         return "is", {"kind": args.kind, "target": args.target}
     if op == "eval":
         return "evaluate", {"javascript": args.javascript}
+    if op == "cookies":
+        return "cookies", {}
+    if op == "find":
+        return "find", {"query": args.query}
     if op == "screenshot":
         kw = {"full_page": args.full_page}
         if args.out:

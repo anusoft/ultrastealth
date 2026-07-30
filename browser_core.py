@@ -10,11 +10,14 @@ the current tab's ref-map) or a CSS selector (anything else).
 """
 import asyncio
 import base64
+import difflib
 import os
 import re
 import sys
 import time
 from pathlib import Path
+
+import psutil
 
 os.environ.setdefault("REBROWSER_PATCHES_RUNTIME_FIX_MODE", "addBinding")
 
@@ -30,7 +33,30 @@ _browser_config = (None, None, None)
 _session_start = None
 _ref_maps: dict = {}              # tab_id -> {ref: entry}
 _prev_ref_signatures: dict = {}   # tab_id -> set(signatures) for --diff
-_op_lock = asyncio.Lock()
+
+# Per-session op lock. Today there is exactly one browser session, so every
+# caller resolves to the same _DEFAULT_SESSION lock — behaviorally identical
+# to the single module-global asyncio.Lock() this replaces. Keying by session
+# now (instead of hanging one Lock() off the module) means a future
+# multi-session daemon can hand each session its own serialization lock
+# without having to touch every call site that currently does
+# `async with browser_core._op_lock`.
+_DEFAULT_SESSION = "default"
+_op_locks: dict[str, asyncio.Lock] = {}
+
+
+def get_op_lock(session: str | None = None) -> asyncio.Lock:
+    """Return the op lock for `session`, creating it on first use.
+
+    `session` is optional and defaults to the single shared session — callers
+    that don't yet know about sessions (i.e. everything today) keep getting
+    the one lock every op has always shared.
+    """
+    key = session or _DEFAULT_SESSION
+    lock = _op_locks.get(key)
+    if lock is None:
+        lock = _op_locks[key] = asyncio.Lock()
+    return lock
 
 
 class BrowserCoreError(Exception):
@@ -42,13 +68,14 @@ class BrowserCoreError(Exception):
 
 def reset_state_for_tests(fetcher=None, page=None):
     """Inject fakes / clear state. Test-only."""
-    global _fetcher, _page, _browser_config, _session_start, _ref_maps, _prev_ref_signatures
+    global _fetcher, _page, _browser_config, _session_start, _ref_maps, _prev_ref_signatures, _op_locks
     _fetcher = fetcher
     _page = page
     _browser_config = (None, None, None)
     _session_start = time.time()
     _ref_maps = {}
     _prev_ref_signatures = {}
+    _op_locks = {}
 
 
 def _page_id(page) -> str:
@@ -70,6 +97,61 @@ async def status() -> dict:
         "uptime_s": (time.time() - _session_start) if _session_start else 0,
         "tabs": len(_fetcher._context.pages) if _fetcher is not None else 0,
     }
+
+
+# ── Health check ─────────────────────────────────────────────────────
+def _process_alive(fetcher) -> bool | None:
+    """OS-level liveness check for `fetcher`'s browser process tree.
+
+    Mirrors the matching convention mcp_server._hard_kill_browser already uses
+    for crash recovery (process name contains chrome/chromium AND its cmdline
+    references this fetcher's user_data_dir) — deliberately reusing that
+    heuristic rather than inventing a second one. This is independent of the
+    CDP connection: a process can be alive but wedged, or the CDP pipe can
+    look intact for a moment after the process is already gone.
+
+    Returns None (indeterminate — callers should not treat this as "exited")
+    when liveness can't be established, e.g. no user_data_dir is known yet.
+    """
+    udd = getattr(fetcher, "user_data_dir", None) if fetcher is not None else None
+    if not udd:
+        return None
+    for proc in psutil.process_iter(["name", "cmdline"]):
+        try:
+            cmdline = proc.info.get("cmdline") or []
+            name = (proc.info.get("name") or "").lower()
+            if ("chrome" in name or "chromium" in name) and any(udd in a for a in cmdline):
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
+
+
+async def health_check(cdp_timeout: float = 10.0) -> dict:
+    """Diagnose the current browser session with two independent signals.
+
+    Distinguishes three states the prior single `page.title()` ping conflated:
+      - "process_exited": the OS-level Chrome/Chromium process is gone
+        (crashed or killed out-of-band). The CDP pipe has nothing to talk to
+        either way, so the CDP probe is skipped rather than waiting out a
+        timeout against a dead connection.
+      - "unresponsive": the OS process is still alive but a lightweight CDP
+        call (page.title()) did not return within `cdp_timeout` — a wedged
+        browser/renderer, not a missing one.
+      - "healthy": the process is alive and CDP answered in time.
+
+    Raises BrowserCoreError("no_browser", ...) via get_page() when there is no
+    browser session at all, same as every other inspector in this module.
+    """
+    page = await get_page()
+    process_alive = _process_alive(_fetcher)
+    if process_alive is False:
+        return {"state": "process_exited", "process_alive": False, "cdp_ok": False}
+    try:
+        await asyncio.wait_for(page.title(), timeout=cdp_timeout)
+        return {"state": "healthy", "process_alive": process_alive, "cdp_ok": True}
+    except Exception:
+        return {"state": "unresponsive", "process_alive": process_alive, "cdp_ok": False}
 
 
 # ── Snapshot + ref-map ──────────────────────────────────────────────
@@ -130,6 +212,59 @@ async def snapshot(interactive: bool = True, compact: bool = True,
     if not compact:
         out["tree"] = tree
     return out
+
+
+def _match_score(query: str, entry: dict) -> float:
+    """Score how well `entry` (a snapshot ref: role + accessible name) matches
+    a natural-language-ish `query`. Pure stdlib text similarity — no LLM call,
+    no network, no new dependency — combining:
+      - difflib.SequenceMatcher ratio as a fuzzy baseline (handles typos/partial
+        matches),
+      - a substring bonus when the query appears verbatim in the name,
+      - an exact-match bonus for an exact name/role hit,
+      - a token-overlap bonus so multi-word queries reward matching words
+        regardless of order.
+    Deterministic and synchronous; safe to call in a tight loop over a
+    snapshot's refs.
+    """
+    q = (query or "").strip().lower()
+    name = (entry.get("name") or "").strip().lower()
+    role = (entry.get("role") or "").strip().lower()
+    haystack = f"{role} {name}".strip()
+    if not q or not haystack:
+        return 0.0
+    score = difflib.SequenceMatcher(None, q, haystack).ratio()
+    if name and q in name:
+        score += 0.3
+    if q == name or q == role:
+        score += 0.5
+    q_tokens = set(q.split())
+    if q_tokens:
+        hay_tokens = set(haystack.split())
+        score += 0.4 * (len(q_tokens & hay_tokens) / len(q_tokens))
+    return round(score, 4)
+
+
+async def find(query: str) -> dict:
+    """Return the single best-matching interactive element ref for `query`.
+
+    Matches against the current accessibility snapshot's existing labels
+    (role + accessible name) using a lightweight, synchronous, dependency-free
+    text-similarity score (see `_match_score`) — NOT an LLM call. Refreshes
+    the snapshot first so `find` works standalone without a prior `snapshot`
+    step. Always returns its top pick plus a `score` so the caller can decide
+    whether the match is good enough; raises only when there is nothing to
+    match against at all.
+    """
+    snap = await snapshot()
+    refs = snap["refs"]
+    if not refs:
+        raise BrowserCoreError("no_matches", "No interactive elements in the current snapshot")
+    best = max(refs, key=lambda e: _match_score(query, e))
+    score = _match_score(query, best)
+    label = f'{best["role"]} "{best["name"]}"' if best.get("name") else best["role"]
+    return {"ref": best["ref"], "label": label, "score": score,
+            "role": best["role"], "name": best.get("name", "")}
 
 
 async def _resolve(page, target: str):
@@ -296,6 +431,15 @@ async def evaluate(javascript: str) -> dict:
     return {"result": await page.evaluate(javascript)}
 
 
+async def cookies() -> dict:
+    """Return the current browser context's cookies (context.cookies())."""
+    page = await get_page()
+    try:
+        return {"cookies": await page.context.cookies()}
+    except Exception as e:
+        raise BrowserCoreError("cookies_failed", str(e))
+
+
 async def screenshot(full_page: bool = False, path: str | None = None) -> dict:
     page = await get_page()
     data = await page.screenshot(full_page=full_page)
@@ -315,6 +459,7 @@ OPS = {
     "scroll_into_view": scroll_into_view, "select": select_option,
     "scroll": scroll, "get": get, "is": is_, "wait": wait,
     "evaluate": evaluate, "screenshot": screenshot, "status": status,
+    "cookies": cookies, "find": find,
 }
 
 
@@ -352,10 +497,23 @@ OPS["batch"] = batch
 async def ensure_browser(runner: str | None = None, user_data_dir: str | None = None,
                          profile_directory: str | None = None) -> None:
     # Lazy import avoids an import cycle with mcp_server (which imports this module).
-    from mcp_server import _profile_config, _fetcher_kwargs
+    from mcp_server import (
+        _fetcher_kwargs,
+        _profile_args_supplied,
+        _profile_config,
+        _profile_requested,
+    )
 
     global _fetcher, _page, _browser_config, _session_start
-    config = _profile_config(runner, user_data_dir, profile_directory)
+    if (
+        not _profile_args_supplied(runner, user_data_dir, profile_directory)
+        and _profile_requested(_browser_config)
+    ):
+        config = _browser_config
+    else:
+        config = _profile_config(runner, user_data_dir, profile_directory)
+    if _fetcher is not None and _profile_requested(config) and config != _browser_config:
+        await close()
     if _fetcher is None:
         _fetcher = UltrastealthFetcher(**_fetcher_kwargs(config))
         await _fetcher.start()

@@ -185,6 +185,90 @@ class McpProfileTests(unittest.TestCase):
         self.assertEqual(FakeFetcher.instances[0].profile_directory, "Profile 6")
         self.assertFalse(FakeFetcher.instances[0].fallback_to_temp_profile)
 
+    def test_no_arg_followup_reuses_active_profile_despite_env_profile(self):
+        with patch.object(mcp_server, "UltrastealthFetcher", FakeFetcher), \
+            patch.object(mcp_server.asyncio, "sleep", new=self._sleep), \
+            patch.object(mcp_server.log, "info"), \
+            patch.dict(
+                mcp_server.os.environ,
+                {
+                    "ULTRASTEALTH_RUNNER": "chrome+default-profile",
+                    "ULTRASTEALTH_USER_DATA_DIR": "/Users/alice/Library/Application Support/Google/Chrome",
+                    "ULTRASTEALTH_PROFILE_DIRECTORY": "Profile 6",
+                },
+                clear=True,
+            ):
+            asyncio.run(
+                mcp_server.browser_navigate(
+                    "https://example.com/active",
+                    runner="chrome+default-profile",
+                    user_data_dir="/tmp/ultrastealth-isolated-profile",
+                    profile_directory="Default",
+                )
+            )
+            fetcher, page = asyncio.run(mcp_server._ensure_browser())
+
+        self.assertEqual(len(FakeFetcher.instances), 1)
+        self.assertIs(fetcher, FakeFetcher.instances[0])
+        self.assertEqual(page.url, "https://example.com/active")
+        self.assertEqual(
+            FakeFetcher.instances[0].user_data_dir,
+            "/tmp/ultrastealth-isolated-profile",
+        )
+        self.assertEqual(FakeFetcher.instances[0].profile_directory, "Default")
+
+    def test_restart_without_profile_args_reuses_active_profile(self):
+        with patch.object(mcp_server, "UltrastealthFetcher", FakeFetcher), \
+            patch.object(mcp_server.asyncio, "sleep", new=self._sleep), \
+            patch.object(mcp_server.log, "info"), \
+            patch.dict(
+                mcp_server.os.environ,
+                {
+                    "ULTRASTEALTH_RUNNER": "chrome+default-profile",
+                    "ULTRASTEALTH_USER_DATA_DIR": "/Users/alice/Library/Application Support/Google/Chrome",
+                    "ULTRASTEALTH_PROFILE_DIRECTORY": "Profile 6",
+                },
+                clear=True,
+            ):
+            asyncio.run(
+                mcp_server.browser_navigate(
+                    "https://example.com/active",
+                    runner="chrome+default-profile",
+                    user_data_dir="/tmp/ultrastealth-isolated-profile",
+                    profile_directory="Default",
+                )
+            )
+            result = asyncio.run(mcp_server.browser_restart())
+
+        self.assertIn("Browser restarted. Navigated to: https://example.com/active", result)
+        self.assertEqual(len(FakeFetcher.instances), 2)
+        self.assertTrue(FakeFetcher.instances[0].closed)
+        self.assertEqual(
+            FakeFetcher.instances[1].user_data_dir,
+            "/tmp/ultrastealth-isolated-profile",
+        )
+        self.assertEqual(FakeFetcher.instances[1].profile_directory, "Default")
+
+    def test_temp_profile_runner_ignores_env_profile_config(self):
+        with patch.object(mcp_server, "UltrastealthFetcher", FakeFetcher), \
+            patch.object(mcp_server.asyncio, "sleep", new=self._sleep), \
+            patch.object(mcp_server.log, "info"), \
+            patch.dict(
+                mcp_server.os.environ,
+                {
+                    "ULTRASTEALTH_RUNNER": "chrome+default-profile",
+                    "ULTRASTEALTH_USER_DATA_DIR": "/Users/alice/Library/Application Support/Google/Chrome",
+                    "ULTRASTEALTH_PROFILE_DIRECTORY": "Profile 6",
+                },
+                clear=True,
+            ):
+            result = asyncio.run(mcp_server.browser_restart(runner="chrome+temp-profile"))
+
+        self.assertIn("Browser restarted with a clean session", result)
+        self.assertEqual(FakeFetcher.instances[0].runner, "chrome+temp-profile")
+        self.assertIsNone(FakeFetcher.instances[0].user_data_dir)
+        self.assertIsNone(FakeFetcher.instances[0].profile_directory)
+
     def test_explicit_chrome_tool_path_is_preserved(self):
         with patch.object(mcp_server, "UltrastealthFetcher", FakeFetcher), \
             patch.object(mcp_server.asyncio, "sleep", new=self._sleep), \

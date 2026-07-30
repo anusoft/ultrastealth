@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ultrastealth"
 version = "0.1.0"
-description = "Maximum-stealth browser automation in Python — rebrowser-playwright (CDP-leak fixes) + Xvfb + undetectable, OS-consistent JS bypasses + MCP server."
+description = "Maximum-stealth browser automation in Python — rebrowser-playwright (CDP-leak fixes) + Xvfb + consistent real-Chrome fingerprint + MCP server."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -14,7 +14,10 @@ keywords = ["scraping", "stealth", "playwright", "anti-bot", "mcp", "automation"
 dependencies = [
     "rebrowser-playwright",
     "nest-asyncio",
-    "mcp[cli]",
+    # mcp 2.0.0 renamed FastMCP to MCPServer and rewrote the wire protocol (see
+    # modelcontextprotocol/python-sdk release notes) — mcp_server.py has been
+    # migrated to the v2 API, so floor here rather than allowing a v1 install.
+    "mcp[cli]>=2.0.0",
     "psutil",
     "uvicorn",
 ]
@@ -22,6 +25,11 @@ dependencies = [
 [project.optional-dependencies]
 # Interactive REPLs (ultrastealth.repl / ultrastealth.agent_repl)
 repl = ["ipython", "openai"]
+# Alternative browser-automation engine (fetcher.py: engine="patchright" /
+# ULTRASTEALTH_ENGINE=patchright). Opt-in, not a core requirement: rebrowser-
+# playwright above remains the default engine. See CLAUDE.md for the
+# verified compatibility findings before switching a workload over.
+patchright = ["patchright"]
 
 [project.urls]
 Homepage = "https://anusoft.github.io/ultrastealth/"
@@ -41,6 +49,3 @@ packages = ["ultrastealth"]
 
 [tool.setuptools.package-dir]
 ultrastealth = "."
-
-[tool.setuptools.package-data]
-ultrastealth = ["bypasses/*.js", "example/*"]

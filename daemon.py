@@ -40,6 +40,10 @@ async def dispatch(request: dict) -> dict:
     req_id = request.get("id")
     cmd = request.get("cmd")
     args = request.get("args") or {}
+    # Optional today (every request maps to the same default session); wiring
+    # it through now means a future multi-session daemon can route to the
+    # right per-session lock without touching this dispatch loop again.
+    session = request.get("session")
     fn = COMMANDS.get(cmd)
     if fn is None:
         return {"id": req_id, "ok": False,
@@ -47,7 +51,7 @@ async def dispatch(request: dict) -> dict:
     try:
         if cmd not in _LIFECYCLE and browser_core._page is None:
             await browser_core.ensure_browser()
-        async with browser_core._op_lock:
+        async with browser_core.get_op_lock(session):
             result = await fn(**args)
         return {"id": req_id, "ok": True, "result": result}
     except browser_core.BrowserCoreError as e:
@@ -122,16 +126,38 @@ async def _idle_reaper(idle_timeout: float):
                 await browser_core.close()
 
 
+_last_health_state = None  # last diagnosis from browser_core.health_check(); test/introspection hook
+
+
 async def _health_watchdog(interval: float = 20.0):
-    """Ping the page; hard-restart a wedged browser."""
+    """Diagnose the warm browser on an interval; hard-restart only when it's
+    genuinely gone or wedged (see browser_core.health_check for the states).
+
+    This loop must never die. It runs once via asyncio.create_task() in run()
+    and nothing restarts it, so any exception that escapes a single tick would
+    silently and permanently disable health monitoring for the rest of the
+    daemon's life -- an unbounded false-negative window, worse than the
+    bounded one this watchdog exists to close. `BrowserCoreError` (the expected
+    "raced with a close() elsewhere" case) and any other unexpected exception
+    from health_check()/close() are therefore both swallowed per-tick.
+    """
+    global _last_health_state
     while True:
         await asyncio.sleep(interval)
         if browser_core._page is None:
             continue
         try:
-            await asyncio.wait_for(browser_core._page.title(), timeout=10)
+            diag = await browser_core.health_check()
+        except browser_core.BrowserCoreError:
+            continue  # raced with a close() elsewhere; nothing to diagnose
         except Exception:
-            await browser_core.close()  # next op re-launches clean
+            continue  # unexpected failure diagnosing health; retry next tick rather than killing the watchdog
+        _last_health_state = diag["state"]
+        if diag["state"] in ("process_exited", "unresponsive"):
+            try:
+                await browser_core.close()  # next op re-launches clean
+            except Exception:
+                pass  # best-effort; next tick will re-diagnose and retry
 
 
 async def run(idle_timeout: float = 1800.0):

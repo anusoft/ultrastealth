@@ -3,8 +3,16 @@
 Use only when triage found no usable API, or the task needs real interaction
 (form-fill, clicks, multi-step). Start from `templates/scraper.ultrastealth.py`
 and adapt it. The script drives a real Chrome via `UltrastealthFetcher`
-(rebrowser-playwright + bypasses, `navigator.webdriver:false`) — never plain
+(rebrowser-playwright, `navigator.webdriver:false`) — never plain
 `playwright`/`selenium`.
+
+## Setup
+```bash
+curl -fsSL https://raw.githubusercontent.com/anusoft/ultrastealth/main/install.sh | bash
+```
+This installs Ultrastealth, the rebrowser-playwright Chromium fallback, and the
+driver fingerprint patch. On Linux, still run headed scripts under
+`xvfb-run -a python3 <script>.py`.
 
 ## Use the high-level API — it keeps one page across the whole flow
 

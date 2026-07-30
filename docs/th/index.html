@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ultrastealth — ระบบอัตโนมัติเบราว์เซอร์แบบล่องหน + MCP สำหรับ AI agent</title>
-<meta name="description" content="ระบบอัตโนมัติเบราว์เซอร์แบบล่องหนสูงสุดด้วย Python พร้อม MCP server และ skill สำหรับสร้างสคริปต์ ใช้ Chrome จริงพร้อม default profile, โหมด headful บน macOS และ Xvfb บน Linux, แก้ CDP leak ของ rebrowser-playwright และ JS bypass ที่ตรวจจับไม่ได้">
+<meta name="description" content="ระบบอัตโนมัติเบราว์เซอร์แบบล่องหนสูงสุดด้วย Python พร้อม MCP server และ skill สำหรับสร้างสคริปต์ ใช้ Chrome จริงพร้อม default profile, โหมด headful บน macOS และ Xvfb บน Linux, และแก้ CDP leak ของ rebrowser-playwright">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A5%B7%3C/text%3E%3C/svg%3E">
 <style>
   :root { --bg:#0b0f17; --card:#131a26; --card2:#0f1622; --fg:#e6edf3; --mut:#9aa7b8; --acc:#5eead4; --acc2:#818cf8; --br:#243044; --ok:#34d399; --warn:#f59e0b; }
@@ -65,7 +65,7 @@
   <header>
     <span class="badge">🥷 ล่องหน · 🤖 mcp · 🛠 skill</span>
     <h1>Ultrastealth<span class="dot">.</span></h1>
-    <p class="tag">ระบบอัตโนมัติเบราว์เซอร์แบบล่องหนสูงสุดด้วย Python — พร้อม <strong>MCP server</strong> และ <strong>skill สำหรับสร้างสคริปต์</strong> ที่ให้ AI agent ของคุณ scrape เว็บที่ <em>ป้องกันแน่นหนา</em> ได้ ใช้ Chrome จริงพร้อม default profile, โหมด headful บน macOS, Xvfb บน Linux, แก้ CDP leak ของ <code>rebrowser-playwright</code>, และ JS bypass ที่ตรวจจับไม่ได้และสอดคล้องกับ OS</p>
+    <p class="tag">ระบบอัตโนมัติเบราว์เซอร์แบบล่องหนสูงสุดด้วย Python — พร้อม <strong>MCP server</strong> และ <strong>skill สำหรับสร้างสคริปต์</strong> ที่ให้ AI agent ของคุณ scrape เว็บที่ <em>ป้องกันแน่นหนา</em> ได้ ใช้ Chrome จริงพร้อม default profile, โหมด headful บน macOS, Xvfb บน Linux, และแก้ CDP leak ของ <code>rebrowser-playwright</code></p>
     <div class="cta">
       <a class="btn primary" href="#install">ติดตั้ง MCP</a>
       <a class="btn ghost" href="https://github.com/anusoft/ultrastealth">ดูบน GitHub</a>
@@ -105,11 +105,10 @@
     <h2>ทำไมถึงล่องหนได้</h2>
     <p class="sub">การตรวจจับถูกสู้ที่ระดับ driver, เบราว์เซอร์ และหน้าเพจ — ไม่ใช่แค่ปลอม user-agent</p>
     <div class="grid">
-      <div class="card"><h3>แพตช์ระดับ driver</h3><p>เปลี่ยนชื่อ identifier ที่รั่วของ <code>rebrowser-playwright</code> (<code>__pwInitScripts</code> / <code>UtilityScript</code>) ที่ source ของ driver ยกคะแนน bot ของ rebrowser จาก <strong>6/10 → 8/10</strong></p></div>
+      <div class="card"><h3>แพตช์ระดับ driver</h3><p>เปลี่ยนชื่อ identifier ที่รั่ว 4 ตัวของ <code>rebrowser-playwright</code> (<code>__pwInitScripts</code>, <code>UtilityScript</code>, <code>__playwright_builtins__</code>, <code>__playwright__binding__</code>) ที่ source ของ driver ทำคะแนนได้ <strong>6/6</strong> บน bot detector ของ rebrowser (0 fail; ข้าม 4 probe ที่เข้าถึงไม่ได้จาก isolated world โดยออกแบบไว้)</p></div>
       <div class="card"><h3>Evaluate ใน isolated world</h3><p><code>REBROWSER_PATCHES_RUNTIME_FIX_MODE=alwaysIsolated</code> ทำให้ <code>page.evaluate</code> ไม่ทำงานใน main world → <strong>ตรวจไม่พบเลย</strong> บน probe ของ rebrowser</p></div>
       <div class="card"><h3>Headed ไม่ใช่ headless</h3><p>เปิด Chrome จริงแบบ headful บน macOS และผ่าน Xvfb บน Linux ด้วยชุด flag ที่คัดมาแล้ว — ไม่มีร่องรอย headless, ตัด flag automation ทิ้ง, <code>navigator.webdriver:false</code></p></div>
-      <div class="card"><h3>Bypass ที่ตรวจไม่ได้</h3><p>การปลอม WebGL/canvas/audio/font ใช้ Proxy native-masking (<code>toString</code>/<code>name</code> อ่านค่า native) และสอดคล้องกับ OS เปิดใช้ด้วย <code>ULTRASTEALTH_BYPASSES=on</code></p></div>
-      <div class="card"><h3>ปิดช่อง WebRTC leak</h3><p><code>webrtc_spoof.js</code> ที่ port มาจาก Camoufox ตัด ICE candidate ที่เป็น IP จริง ไม่ให้ proxy ถูกเปิดโปงผ่าน WebRTC</p></div>
+      <div class="card"><h3>Fingerprint จริง ไม่ปลอม</h3><p>ไม่มีการปลอม canvas/WebGL/audio แบบ inject — ผลการวัดเปรียบเทียบแสดงว่า fingerprint ของ Chrome จริงที่ไม่แก้ไขเลยชนะแบบปลอมในทุกเว็บที่ทดสอบ</p></div>
       <div class="card"><h3>DevTools เครือข่ายสำหรับ agent</h3><p>MCP เปิดการจับ network แบบ Chrome DevTools (<code>browser_network_log</code>/<code>_detail</code>/<code>_response_body</code>) — เหมาะกับการค้นหา JSON API</p></div>
     </div>
   </section>
@@ -120,13 +119,12 @@
     <p class="sub">ให้ coding agent ของคุณมีเบราว์เซอร์ล่องหนที่สั่งงานได้ — เปิดหน้า คลิก พิมพ์ ถ่ายภาพหน้าจอ และจับ traffic เครือข่าย ทั้งหมดแบบกันการตรวจจับ</p>
 
     <h4>ตั้งค่าครั้งเดียว</h4>
-    <pre><code># ติดตั้ง ultrastealth + MCP server (จะได้คำสั่ง `ultrastealth-mcp`)
-pipx install --include-deps git+https://github.com/anusoft/ultrastealth.git
+    <pre><code># ติดตั้ง ultrastealth + MCP server, Chromium fallback และ driver patch
+curl -fsSL https://raw.githubusercontent.com/anusoft/ultrastealth/main/install.sh | bash
 
-# ติดตั้ง Chromium ที่ rebrowser ใช้ แล้วแพตช์ CDP leak ของ driver
-rebrowser_playwright install chromium   # หมายเหตุ: ใช้ขีดล่าง — เป็นชื่อที่ pipx สร้างให้
-ultrastealth-patch            # รันซ้ำหลัง `pipx upgrade ultrastealth` ทุกครั้ง</code></pre>
-    <p class="note">ค่าเริ่มต้นคือ <code>chrome+default-profile</code>: ใช้ Google Chrome จริงกับ Chrome user-data root ของ OS และ <code>--profile-directory=Default</code> บน macOS จะเป็น Chrome แบบ headful ปกติ ส่วนโหมด headed บน Linux ต้องมี X server — <code>sudo apt install xvfb</code> แล้วรัน agent ผ่าน <code>xvfb-run -a</code> (หรือกำหนด <code>DISPLAY</code>) ถ้า Chrome เปิด default profile เดียวกันอยู่ ให้ปิด Chrome ก่อน หรือกำหนด <code>ULTRASTEALTH_RUNNER=chrome+temp-profile</code> / <code>ULTRASTEALTH_USER_DATA_DIR=/path/to/profile</code> ไม่อยากใช้ <code>pipx</code>? ดู <a href="#clone">การติดตั้งแบบ clone</a> ด้านล่าง</p>
+# รันซ้ำหลังอัปเกรด dependency เพื่อ install browser + patch อีกครั้ง
+ultrastealth-install</code></pre>
+    <p class="note">ค่าเริ่มต้นคือ <code>chrome+default-profile</code>: ใช้ Google Chrome จริงกับ Chrome user-data root ของ OS และ <code>--profile-directory=Default</code> บน macOS จะเป็น Chrome แบบ headful ปกติ ส่วนโหมด headed บน Linux ต้องมี X server — <code>sudo apt install xvfb</code> แล้วรัน agent ผ่าน <code>xvfb-run -a</code> (หรือกำหนด <code>DISPLAY</code>) ถ้า Chrome เปิด default profile เดียวกันอยู่ ให้ปิด Chrome ก่อน หรือกำหนด <code>ULTRASTEALTH_RUNNER=chrome+temp-profile</code> / <code>ULTRASTEALTH_USER_DATA_DIR=/path/to/profile</code> ถ้าต้องการติดตั้งจาก repo clone ดู <a href="#clone">การติดตั้งแบบ clone</a> ด้านล่าง</p>
 
     <h4>จากนั้นเชื่อมเข้ากับเครื่องมือของคุณ</h4>
     <div class="tabs" role="tablist">

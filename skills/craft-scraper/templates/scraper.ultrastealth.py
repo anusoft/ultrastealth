@@ -3,7 +3,7 @@
 
 Use this path only when there is no usable API (data renders in-DOM) or the task
 needs real interaction (clicks, forms, multi-step). It drives a real Chrome under
-Ultrastealth (rebrowser-playwright + bypasses, navigator.webdriver:false), which
+Ultrastealth (rebrowser-playwright, navigator.webdriver:false), which
 passes bot detection where vanilla Playwright/Selenium fails.
 
 Source notes (from Ultrastealth MCP exploration):
@@ -16,6 +16,9 @@ Usage:
   python3 scraper.py --query shoes --pages 3
   python3 scraper.py --help
 
+Bootstrap:
+  curl -fsSL https://raw.githubusercontent.com/anusoft/ultrastealth/main/install.sh | bash
+
 Side-effect-free at import: the scrape function is importable without launching a
 browser; only the __main__ block runs anything.
 
@@ -23,7 +26,7 @@ On Linux, headed mode needs an X server — run under `xvfb-run -a python3 scrap
 """
 import asyncio
 import json
-from ultrastealth import UltrastealthFetcher  # `pipx install git+https://github.com/anusoft/ultrastealth.git`
+from ultrastealth import UltrastealthFetcher  # install: curl -fsSL https://raw.githubusercontent.com/anusoft/ultrastealth/main/install.sh | bash
 
 # ── Fast alternative: attach to the warm daemon (no cold Chrome start) ──────────
 # For a plain navigate → wait → evaluate-extract flow, prefer connecting to the

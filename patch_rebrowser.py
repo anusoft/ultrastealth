@@ -1,13 +1,29 @@
 """Neutralize rebrowser_playwright driver fingerprints (idempotent, revertible).
 
 Some bot detectors (e.g. bot-detector.rebrowser.net) probe the page context for
-two identifiers that Playwright's bundled Node driver leaks:
+identifiers that Playwright's bundled Node driver leaks:
 
   * ``globalThis.__pwInitScripts`` — the init-script dedup map created by every
     ``addInitScript`` (page.js). A JS bypass cannot reliably hide it: the driver
     re-creates it *before* user scripts run, so it must be renamed at the source.
   * ``UtilityScript`` — the class wrapping every ``page.evaluate`` call. Its name
     shows up in ``Error().stack`` captured by page JS during an evaluate.
+  * ``globalThis.__playwright_builtins__`` — a cache of native ``setTimeout``/
+    ``Date``/``Map``/etc. that every injected script (utility script, clock,
+    console API shim, WebSocket mock, the injected DOM script) creates via
+    ``builtins(global)`` on first use. Still open upstream as of this writing
+    (rebrowser/rebrowser-patches#110); not covered by any JS bypass since, like
+    ``__pwInitScripts``, the driver recreates it before user scripts run.
+  * ``globalThis.__playwright__binding__`` — the CDP ``Runtime.addBinding``
+    channel name the driver exposes on every page (``PageBinding.kPlaywrightBinding``
+    in ``lib/server/page.js``, mirrored by the BiDi driver's binding channel in
+    ``lib/server/bidi/bidiPage.js``). A global-property sweep
+    (``Object.getOwnPropertyNames(globalThis)``) finds it unconditionally, since
+    the driver calls ``Runtime.addBinding`` on every frame session regardless of
+    whether the caller ever uses ``exposeBinding``/``exposeFunction``. A JS
+    bypass (``delete window.__playwright__binding__``) races the CDP binding
+    call and can only win *after* the property already existed for one tick, so
+    like the other two, this must be renamed at the source.
 
 These live in the *installed pip package's* bundled driver, which a
 ``pip install -U rebrowser-playwright`` overwrites — so re-run this after any
@@ -33,6 +49,8 @@ detector starts probing the defaults)::
 
     ULTRASTEALTH_PW_INIT_NAME=__execGuards
     ULTRASTEALTH_UTILITY_NAME=ExecutionProxy
+    ULTRASTEALTH_BUILTINS_NAME=__nativeRefs
+    ULTRASTEALTH_BINDING_NAME=__execChannel
 """
 
 from __future__ import annotations
@@ -47,6 +65,8 @@ from pathlib import Path
 # and are not what the known detectors grep for. Override via env if needed.
 PW_INIT_NAME = os.environ.get("ULTRASTEALTH_PW_INIT_NAME", "__execGuards")
 UTILITY_NAME = os.environ.get("ULTRASTEALTH_UTILITY_NAME", "ExecutionProxy")
+BUILTINS_NAME = os.environ.get("ULTRASTEALTH_BUILTINS_NAME", "__nativeRefs")
+BINDING_NAME = os.environ.get("ULTRASTEALTH_BINDING_NAME", "__execChannel")
 
 # Sanity: replacement tokens must be valid JS identifiers and must differ from
 # the originals so the idempotency check is unambiguous.
@@ -89,6 +109,35 @@ def _renames() -> list[Rename]:
         #   utilityScriptSource.js (inside the bundled source string):
         #   export key, export arrow value, and `var UtilityScript = class`.
         Rename("lib/generated/utilityScriptSource.js", "UtilityScript", UTILITY_NAME, True, 3),
+        # __playwright_builtins__: each injected-script bundle embeds its own copy
+        # of builtins(global) (packages/playwright-core/src/utils/isomorphic/
+        # builtins.ts), which does `if (!global["__playwright_builtins__"]) {...
+        # Object.defineProperty(global, "__playwright_builtins__", ...) ... return
+        # global["__playwright_builtins__"]` — 3 string-literal occurrences per
+        # file. Word-boundary matching handles the quoted-string usage fine since
+        # `_` is a word char and the quotes/brackets around it are not. Only the
+        # files actually injected into the automated page are patched here — the
+        # vite-bundled trace-viewer/recorder dev-tool assets also reference this
+        # token but never execute in the target page, so touching them would add
+        # risk (minified bundle corruption) for zero stealth benefit.
+        Rename("lib/utils/isomorphic/builtins.js", "__playwright_builtins__", BUILTINS_NAME, True, 3),
+        Rename("lib/generated/utilityScriptSource.js", "__playwright_builtins__", BUILTINS_NAME, True, 3),
+        Rename("lib/generated/injectedScriptSource.js", "__playwright_builtins__", BUILTINS_NAME, True, 3),
+        Rename("lib/generated/clockSource.js", "__playwright_builtins__", BUILTINS_NAME, True, 3),
+        Rename("lib/generated/consoleApiSource.js", "__playwright_builtins__", BUILTINS_NAME, True, 3),
+        Rename("lib/generated/webSocketMockSource.js", "__playwright_builtins__", BUILTINS_NAME, True, 3),
+        # __playwright__binding__: the CDP Runtime.addBinding channel name
+        # (PageBinding.kPlaywrightBinding), sent on every frame session
+        # regardless of exposeBinding usage — page.js defines the literal
+        # once and every call site (crPage.js, wkPage.js, ffBrowser.js)
+        # references it via the exported constant, so a single source-level
+        # rename covers Chromium/WebKit/Firefox alike. The BiDi driver keeps
+        # its own copy of the same literal as its exposed binding channel
+        # name and is patched too — neither file is a vite-bundled dev-tool
+        # asset (unlike the trace-viewer/recorder bundles excluded above),
+        # so both are live server code and in scope.
+        Rename("lib/server/page.js", "__playwright__binding__", BINDING_NAME, True, 1),
+        Rename("lib/server/bidi/bidiPage.js", "__playwright__binding__", BINDING_NAME, True, 1),
     ]
 
 
@@ -109,6 +158,8 @@ def _validate_tokens() -> None:
     for name, val, orig in (
         ("ULTRASTEALTH_PW_INIT_NAME", PW_INIT_NAME, "__pwInitScripts"),
         ("ULTRASTEALTH_UTILITY_NAME", UTILITY_NAME, "UtilityScript"),
+        ("ULTRASTEALTH_BUILTINS_NAME", BUILTINS_NAME, "__playwright_builtins__"),
+        ("ULTRASTEALTH_BINDING_NAME", BINDING_NAME, "__playwright__binding__"),
     ):
         if not _IDENT.match(val):
             sys.exit(f"ERROR: {name}={val!r} is not a valid JS identifier")

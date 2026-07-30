@@ -8,6 +8,8 @@
  *   Pagination: <page|offset|cursor>; total-count field: <path.to.total>
  *
  * Runtime: Bun only.  No browser at runtime — pure HTTP via scrapling-js.
+ * Bootstrap this script directory:
+ *   curl -fsSL https://raw.githubusercontent.com/anusoft/scrapling-js/main/install.sh | bash
  *
  * Usage:
  *   bun run scraper.js                 # reproduces the original task (defaults below)
@@ -20,7 +22,7 @@
  * (`import.meta.main`), so it can be imported and unit-tested.
  */
 
-import { Fetcher } from "scrapling-js"; // `bun add scrapling-js`
+import { Fetcher } from "scrapling-js"; // install: curl -fsSL https://raw.githubusercontent.com/anusoft/scrapling-js/main/install.sh | bash
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 

@@ -18,14 +18,21 @@ Usage:
 
 import asyncio
 import argparse
+from contextlib import asynccontextmanager
 import json
 import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
 import sys
 import time
 import traceback
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 
 # ---------------------------------------------------------------------------
@@ -60,11 +67,526 @@ class SiteResult:
 # ---------------------------------------------------------------------------
 
 METHODS = {
-    "ultrastealth": "Ultrastealth (rebrowser + Xvfb + enhanced bypasses)",
+    "ultrastealth": "Ultrastealth (rebrowser + Xvfb)",
+    "patchright": "Ultrastealth (patchright engine + Xvfb, opt-in alternative)",
+    "lightpanda": "Lightpanda (CDP + Chrome-like UA + JS stealth shims)",
+    "obscura": "Obscura (Rust CDP browser, native --stealth anti-detect)",
 }
+
+LIGHTPANDA_DEFAULT_USER_AGENT = (
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/149.0.0.0 Safari/537.36"
+)
+
+OBSCURA_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+)
+
+_LIGHTPANDA_STEALTH_JS = r"""(() => {
+    const ua = __LIGHTPANDA_USER_AGENT__;
+    const defineGetter = (obj, prop, getter) => {
+        try { Object.defineProperty(obj, prop, { get: getter, configurable: true }); } catch (e) {}
+    };
+
+    defineGetter(Navigator.prototype, 'webdriver', () => false);
+    defineGetter(Navigator.prototype, 'userAgent', () => ua);
+    defineGetter(Navigator.prototype, 'languages', () => ['en-US', 'en']);
+    defineGetter(Navigator.prototype, 'platform', () => 'MacIntel');
+    defineGetter(Navigator.prototype, 'hardwareConcurrency', () => 8);
+    defineGetter(Navigator.prototype, 'deviceMemory', () => 8);
+    defineGetter(window, 'outerWidth', () => Math.max(window.innerWidth || 1280, 1432));
+    defineGetter(window, 'outerHeight', () => Math.max((window.innerHeight || 720) + 88, 822));
+
+    try {
+        if (!window.Plugin) window.Plugin = function Plugin() {};
+        Object.defineProperty(window.Plugin.prototype, Symbol.toStringTag, { value: 'Plugin' });
+        window.Plugin.prototype.toString = () => '[object Plugin]';
+    } catch (e) {}
+    const fakePlugin = (name, filename, description) => {
+        const plugin = { name, filename, description, length: 1 };
+        plugin.toString = () => '[object Plugin]';
+        try { Object.setPrototypeOf(plugin, window.Plugin.prototype); } catch (e) {}
+        return plugin;
+    };
+    const fakePlugins = [
+        fakePlugin('Chrome PDF Plugin', 'internal-pdf-viewer', 'Portable Document Format'),
+        fakePlugin('Chrome PDF Viewer', 'mhjfbmdgcfjbbpaeojofohoefgiehjai', ''),
+        fakePlugin('Native Client', 'internal-nacl-plugin', ''),
+        fakePlugin('Widevine Content Decryption Module', 'widevinecdmadapter.plugin', ''),
+        fakePlugin('Chromium PDF Viewer', 'chromium-pdf-viewer', ''),
+    ];
+    fakePlugins.item = index => fakePlugins[index] || null;
+    fakePlugins.namedItem = name => Array.prototype.find.call(fakePlugins, plugin => plugin.name === name) || null;
+    fakePlugins.refresh = () => {};
+    try { Object.defineProperty(fakePlugins, Symbol.toStringTag, { value: 'PluginArray' }); } catch (e) {}
+    try {
+        if (!window.PluginArray) window.PluginArray = function PluginArray() {};
+        Object.defineProperty(window.PluginArray.prototype, Symbol.toStringTag, { value: 'PluginArray' });
+        Object.setPrototypeOf(fakePlugins, window.PluginArray.prototype);
+    } catch (e) {}
+    defineGetter(Navigator.prototype, 'plugins', () => fakePlugins);
+
+    const fakeMimeTypes = [
+        { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+        { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+    ];
+    fakeMimeTypes.item = index => fakeMimeTypes[index] || null;
+    fakeMimeTypes.namedItem = type => Array.prototype.find.call(fakeMimeTypes, mime => mime.type === type) || null;
+    try { Object.defineProperty(fakeMimeTypes, Symbol.toStringTag, { value: 'MimeTypeArray' }); } catch (e) {}
+    try {
+        if (!window.MimeTypeArray) window.MimeTypeArray = function MimeTypeArray() {};
+        Object.defineProperty(window.MimeTypeArray.prototype, Symbol.toStringTag, { value: 'MimeTypeArray' });
+        Object.setPrototypeOf(fakeMimeTypes, window.MimeTypeArray.prototype);
+    } catch (e) {}
+    defineGetter(Navigator.prototype, 'mimeTypes', () => fakeMimeTypes);
+    try {
+        Navigator.prototype.getBattery = () => Promise.resolve({
+            charging: true,
+            chargingTime: 0,
+            dischargingTime: Infinity,
+            level: 1,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => true,
+        });
+    } catch (e) {}
+
+    if (!window.chrome) {
+        try {
+            Object.defineProperty(window, 'chrome', {
+                value: {
+                    app: { isInstalled: false, InstallState: {}, RunningState: {} },
+                    runtime: {},
+                    csi: () => ({ startE: Date.now(), onloadT: Date.now(), pageT: 1, tran: 15 }),
+                    loadTimes: () => ({ requestTime: Date.now() / 1000, startLoadTime: Date.now() / 1000 }),
+                },
+                configurable: true,
+            });
+        } catch (e) {}
+    }
+
+    const glParams = new Map([
+        [0x1F00, 'Google Inc. (Apple)'],
+        [0x1F01, 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)'],
+        [0x1F02, 'WebGL 1.0 (OpenGL ES 2.0 Chromium)'],
+        [0x8B8C, 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)'],
+        [0x9245, 'Google Inc. (Apple)'],
+        [0x9246, 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Max, Unspecified Version)'],
+    ]);
+    const fakeGL = {
+        getExtension: name => name === 'WEBGL_debug_renderer_info'
+            ? { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 }
+            : null,
+        getParameter: param => glParams.has(param) ? glParams.get(param) : 0,
+        getSupportedExtensions: () => ['WEBGL_debug_renderer_info', 'OES_texture_float'],
+    };
+    const canvasProto = window.HTMLCanvasElement && HTMLCanvasElement.prototype;
+    if (canvasProto) {
+        const originalGetContext = canvasProto.getContext;
+        canvasProto.getContext = function(type, ...args) {
+            if (/webgl/i.test(String(type))) return fakeGL;
+            return originalGetContext ? originalGetContext.call(this, type, ...args) : null;
+        };
+        canvasProto.toDataURL = () => 'data:image/png;base64,iVBORw0KGgo=';
+    }
+})();"""
 
 
 # ---------------------------------------------------------------------------
+
+async def _run_ultrastealth_extraction(
+    url: str,
+    extract_js: str,
+    wait_secs: float = 3.0,
+    pre_eval_js: list[str] | None = None,
+    solve_cloudflare: bool = False,
+) -> dict:
+    """Drive UltrastealthFetcher and return the parsed JSON result of extract_js."""
+    from ultrastealth import UltrastealthFetcher
+
+    async with UltrastealthFetcher() as us:
+        return await us.fetch_and_evaluate(
+            url, f"({extract_js})()",
+            wait_secs=wait_secs,
+            pre_eval_js=pre_eval_js,
+            solve_cloudflare=solve_cloudflare,
+        )
+
+
+async def _run_patchright_extraction(
+    url: str,
+    extract_js: str,
+    wait_secs: float = 3.0,
+    pre_eval_js: list[str] | None = None,
+    solve_cloudflare: bool = False,
+) -> dict:
+    """Same as _run_ultrastealth_extraction, but forces the patchright engine.
+
+    Goes through fetcher.py's UltrastealthFetcher(engine="patchright") — same
+    stealth flags/profile/Xvfb path as the "ultrastealth" method above, only
+    the Playwright driver import differs. Unlike lightpanda/obscura, this is
+    not a separate CDP-server process.
+    """
+    from ultrastealth import UltrastealthFetcher
+
+    async with UltrastealthFetcher(engine="patchright") as us:
+        return await us.fetch_and_evaluate(
+            url, f"({extract_js})()",
+            wait_secs=wait_secs,
+            pre_eval_js=pre_eval_js,
+            solve_cloudflare=solve_cloudflare,
+        )
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _find_lightpanda_binary() -> str | None:
+    explicit = os.environ.get("LIGHTPANDA_BINARY")
+    if explicit:
+        return explicit
+
+    from_path = shutil.which("lightpanda")
+    if from_path:
+        return from_path
+
+    for candidate in (
+        Path.cwd() / "lightpanda",
+        Path.cwd() / "tools" / "lightpanda",
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def _lightpanda_user_agent() -> str:
+    return os.environ.get("LIGHTPANDA_USER_AGENT") or LIGHTPANDA_DEFAULT_USER_AGENT
+
+
+def _lightpanda_stealth_enabled() -> bool:
+    return os.environ.get("LIGHTPANDA_STEALTH", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _lightpanda_stealth_script() -> str:
+    return _LIGHTPANDA_STEALTH_JS.replace(
+        "__LIGHTPANDA_USER_AGENT__",
+        json.dumps(_lightpanda_user_agent()),
+    )
+
+
+def _lightpanda_serve_command(binary: str, port: int) -> list[str]:
+    command = [
+        binary,
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--user-agent",
+        _lightpanda_user_agent(),
+    ]
+
+    extra_args = os.environ.get("LIGHTPANDA_ARGS")
+    if extra_args:
+        command.extend(extra_args.split())
+    return command
+
+
+async def _wait_for_lightpanda(endpoint: str, proc: asyncio.subprocess.Process, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    version_url = endpoint.rstrip("/") + "/json/version"
+    last_error = ""
+
+    while time.monotonic() < deadline:
+        if proc.returncode is not None:
+            raise RuntimeError(f"Lightpanda exited before CDP was ready (exit {proc.returncode})")
+        try:
+            with urlopen(version_url, timeout=0.25) as response:
+                if response.status < 500:
+                    return
+        except (OSError, URLError) as exc:
+            last_error = str(exc)
+        await asyncio.sleep(0.1)
+
+    raise TimeoutError(f"Timed out waiting for Lightpanda CDP at {endpoint}: {last_error}")
+
+
+@asynccontextmanager
+async def _lightpanda_endpoint():
+    configured = os.environ.get("LIGHTPANDA_CDP_ENDPOINT")
+    if configured:
+        yield configured
+        return
+
+    binary = _find_lightpanda_binary()
+    if not binary:
+        raise RuntimeError(
+            "Lightpanda binary not found. Set LIGHTPANDA_BINARY, put ./lightpanda "
+            "or ./tools/lightpanda in this repo, or install `lightpanda` on PATH."
+        )
+
+    port = int(os.environ.get("LIGHTPANDA_PORT") or _find_free_port())
+    endpoint = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env.setdefault("LIGHTPANDA_DISABLE_TELEMETRY", "true")
+    env.setdefault("LIGHTPANDA_DISABLE_CORE_DUMP", "1")
+    proc = await asyncio.create_subprocess_exec(
+        *_lightpanda_serve_command(binary, port),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    try:
+        await _wait_for_lightpanda(endpoint, proc)
+        yield endpoint
+    finally:
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+
+async def _run_lightpanda_extraction(
+    url: str,
+    extract_js: str,
+    wait_secs: float = 3.0,
+    pre_eval_js: list[str] | None = None,
+    solve_cloudflare: bool = False,
+) -> dict:
+    """Drive Lightpanda over CDP and return the parsed JSON result of extract_js."""
+    from rebrowser_playwright.async_api import async_playwright
+
+    async with _lightpanda_endpoint() as endpoint:
+        playwright = await async_playwright().start()
+        browser = None
+        context = None
+        page = None
+        try:
+            browser = await playwright.chromium.connect_over_cdp(endpoint, timeout=10000)
+            try:
+                context = await browser.new_context()
+            except Exception:
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+
+            if _lightpanda_stealth_enabled():
+                try:
+                    await context.add_init_script(_lightpanda_stealth_script())
+                except Exception:
+                    pass
+
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(wait_secs)
+
+            # Lightpanda has no graphical rendering and this benchmark intentionally
+            # measures it without Ultrastealth's challenge solver/bypass layer.
+            if solve_cloudflare:
+                await asyncio.sleep(min(wait_secs, 2.0))
+
+            if pre_eval_js:
+                for expr in pre_eval_js:
+                    try:
+                        await page.evaluate(expr)
+                    except Exception:
+                        pass
+                await asyncio.sleep(wait_secs)
+
+            return await page.evaluate(f"({extract_js})()")
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            await playwright.stop()
+
+
+def _find_obscura_binary() -> str | None:
+    explicit = os.environ.get("OBSCURA_BINARY")
+    if explicit:
+        return explicit
+
+    from_path = shutil.which("obscura")
+    if from_path:
+        return from_path
+
+    for candidate in (
+        Path.cwd() / "obscura",
+        Path.cwd() / "tools" / "obscura",
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def _obscura_user_agent() -> str:
+    return os.environ.get("OBSCURA_USER_AGENT") or OBSCURA_DEFAULT_USER_AGENT
+
+
+def _obscura_stealth_enabled() -> bool:
+    return os.environ.get("OBSCURA_STEALTH", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _obscura_serve_command(binary: str, port: int) -> list[str]:
+    command = [
+        binary,
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--user-agent",
+        _obscura_user_agent(),
+        "--quiet",
+    ]
+
+    if _obscura_stealth_enabled():
+        command.append("--stealth")
+
+    extra_args = os.environ.get("OBSCURA_ARGS")
+    if extra_args:
+        command.extend(extra_args.split())
+    return command
+
+
+async def _wait_for_obscura(endpoint: str, proc: asyncio.subprocess.Process, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    version_url = endpoint.rstrip("/") + "/json/version"
+    last_error = ""
+
+    while time.monotonic() < deadline:
+        if proc.returncode is not None:
+            raise RuntimeError(f"Obscura exited before CDP was ready (exit {proc.returncode})")
+        try:
+            with urlopen(version_url, timeout=0.25) as response:
+                if response.status < 500:
+                    return
+        except (OSError, URLError) as exc:
+            last_error = str(exc)
+        await asyncio.sleep(0.1)
+
+    raise TimeoutError(f"Timed out waiting for Obscura CDP at {endpoint}: {last_error}")
+
+
+@asynccontextmanager
+async def _obscura_endpoint():
+    configured = os.environ.get("OBSCURA_CDP_ENDPOINT")
+    if configured:
+        yield configured
+        return
+
+    binary = _find_obscura_binary()
+    if not binary:
+        raise RuntimeError(
+            "Obscura binary not found. Set OBSCURA_BINARY, put ./obscura "
+            "or ./tools/obscura in this repo, or install `obscura` on PATH."
+        )
+
+    port = int(os.environ.get("OBSCURA_PORT") or _find_free_port())
+    endpoint = f"http://127.0.0.1:{port}"
+    proc = await asyncio.create_subprocess_exec(
+        *_obscura_serve_command(binary, port),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        await _wait_for_obscura(endpoint, proc)
+        yield endpoint
+    finally:
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+
+async def _run_obscura_extraction(
+    url: str,
+    extract_js: str,
+    wait_secs: float = 3.0,
+    pre_eval_js: list[str] | None = None,
+    solve_cloudflare: bool = False,
+) -> dict:
+    """Drive Obscura over CDP and return the parsed JSON result of extract_js."""
+    from rebrowser_playwright.async_api import async_playwright
+
+    async with _obscura_endpoint() as endpoint:
+        playwright = await async_playwright().start()
+        browser = None
+        context = None
+        page = None
+        try:
+            browser = await playwright.chromium.connect_over_cdp(endpoint, timeout=10000)
+            try:
+                context = await browser.new_context()
+            except Exception:
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(wait_secs)
+
+            # Obscura's own --stealth mode provides the anti-detection layer here;
+            # this benchmark measures it as shipped, without extra JS shims.
+            if solve_cloudflare:
+                await asyncio.sleep(min(wait_secs, 2.0))
+
+            if pre_eval_js:
+                for expr in pre_eval_js:
+                    try:
+                        await page.evaluate(expr)
+                    except Exception:
+                        pass
+                await asyncio.sleep(wait_secs)
+
+            return await page.evaluate(f"({extract_js})()")
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            await playwright.stop()
+
 
 async def _run_extraction(
     method: str,
@@ -75,19 +597,87 @@ async def _run_extraction(
     expose_function: bool = False,
     solve_cloudflare: bool = False,
 ) -> dict:
-    """Navigate to URL, optionally run pre-eval JS, then extract data via extract_js.
+    """Navigate to URL, optionally run pre-eval JS, then extract data via extract_js."""
+    del expose_function  # Kept for site definitions that describe trigger behavior.
 
-    Drives UltrastealthFetcher and returns the parsed JSON result of extract_js.
-    (`expose_function` is honored by the fetcher's pre_eval handling.)
-    """
-    from ultrastealth import UltrastealthFetcher
-    async with UltrastealthFetcher() as us:
-        return await us.fetch_and_evaluate(
-            url, f"({extract_js})()",
+    if method == "ultrastealth":
+        return await _run_ultrastealth_extraction(
+            url,
+            extract_js,
             wait_secs=wait_secs,
             pre_eval_js=pre_eval_js,
             solve_cloudflare=solve_cloudflare,
         )
+    if method == "patchright":
+        return await _run_patchright_extraction(
+            url,
+            extract_js,
+            wait_secs=wait_secs,
+            pre_eval_js=pre_eval_js,
+            solve_cloudflare=solve_cloudflare,
+        )
+    if method == "lightpanda":
+        return await _run_lightpanda_extraction(
+            url,
+            extract_js,
+            wait_secs=wait_secs,
+            pre_eval_js=pre_eval_js,
+            solve_cloudflare=solve_cloudflare,
+        )
+    if method == "obscura":
+        return await _run_obscura_extraction(
+            url,
+            extract_js,
+            wait_secs=wait_secs,
+            pre_eval_js=pre_eval_js,
+            solve_cloudflare=solve_cloudflare,
+        )
+    raise ValueError(f"Unknown benchmark method: {method}")
+
+
+# ---------------------------------------------------------------------------
+# Shared scoring helpers
+# ---------------------------------------------------------------------------
+
+# Well-known reverse-proxy/CDN outage signatures. Each entry maps to the short
+# status code we report; matching is case-insensitive substring search over
+# whatever raw text/HTML a site's extraction JS surfaced.
+_OUTAGE_SIGNATURES: tuple[tuple[str, str], ...] = (
+    ("502", "502 bad gateway"),
+    ("503", "503 service unavailable"),
+    ("504", "504 gateway time-out"),
+    ("504", "504 gateway timeout"),
+    ("521", "521: web server is down"),
+    ("522", "522: connection timed out"),
+    ("523", "523: origin is unreachable"),
+)
+
+
+def _detect_outage(text: str, html: str = "") -> str | None:
+    """Return a short status code (e.g. "502") if `text`/`html` look like a
+    reverse-proxy/CDN gateway-error page rather than the site's real content;
+    None otherwise.
+
+    Conservative by design: only fires on well-known nginx/Cloudflare gateway
+    error-page phrasing, never on an ordinary "no signal detected" page. A
+    bare "nginx" banner only counts alongside one of the numeric gateway codes
+    (502/503/504), since detection sites can legitimately mention unrelated
+    numbers or words on their own.
+    """
+    haystack = f"{text}\n{html}".lower()
+    if not haystack.strip():
+        return None
+
+    for code, phrase in _OUTAGE_SIGNATURES:
+        if phrase in haystack:
+            return code
+
+    if "nginx" in haystack:
+        for code in ("502", "503", "504"):
+            if code in haystack:
+                return code
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +906,7 @@ async def test_creepjs(method: str) -> SiteResult:
     return result
 
 
-_INFOSIMPLES_JS = """() => {
+_INFOSIMPLES_JS = r"""() => {
     const out = { tests: [] };
     document.querySelectorAll('tr, .test-result, li').forEach(el => {
         const text = el.innerText?.trim();
@@ -333,18 +923,86 @@ _INFOSIMPLES_JS = """() => {
         }
     });
     if (out.tests.length === 0) {
+        // infosimples.github.io/detect-headless renders one <tr> per named probe
+        // (scripts/detect_headless.js) with a fixed value string per test, e.g.
+        // "Detected 5 plugins" -- that word "Detected" is a HEALTHY reading (a real
+        // browser reports non-zero plugins/mimeTypes/languages) and must NOT be
+        // treated as a generic bad-word substring. Score each named probe using the
+        // page's own pass/fail/undefined semantics instead of a keyword blocklist.
         document.querySelectorAll('table tr').forEach(row => {
             const cells = row.querySelectorAll('td, th');
-            if (cells.length >= 2) {
-                const name = cells[0]?.innerText?.trim();
-                const val = cells[1]?.innerText?.trim();
-                if (name && val) {
-                    const passed = !val.toLowerCase().includes('headless') &&
-                                  !val.toLowerCase().includes('detected') &&
-                                  !val.toLowerCase().includes('fail');
-                    out.tests.push({ name: name.substring(0, 80), value: val.substring(0, 100), passed });
-                }
+            if (cells.length < 2) return;
+            const name = cells[0]?.innerText?.trim();
+            const val = cells[1]?.innerText?.trim();
+            if (!name || !val || name === 'Test') return;  // 'Test'/'Result' header row
+
+            const lower = val.toLowerCase();
+            let passed = null;  // null = inconclusive/undefined -> reported as skip
+            let m;
+
+            switch (name) {
+                case 'Plugins':
+                    m = val.match(/Detected (\d+) plugins/i);
+                    passed = m ? (parseInt(m[1], 10) > 0 ? true : null) : null;
+                    break;
+                case 'Mime':
+                    m = val.match(/Detected (\d+) mime types/i);
+                    passed = m ? (parseInt(m[1], 10) > 0 ? true : null) : null;
+                    break;
+                case 'Languages':
+                    m = val.match(/Detected (\d+) languages/i);
+                    passed = !!m && parseInt(m[1], 10) > 0 && !/using\s*$/i.test(val);
+                    break;
+                case 'Webdriver':
+                    passed = /missing webdriver/i.test(val);
+                    break;
+                case 'Plugins Prototype':
+                case 'Mime Prototype':
+                    passed = /are consistent/i.test(val) && !/aren't consistent/i.test(val);
+                    break;
+                case 'Chrome':
+                    passed = /not present/i.test(val) ? null : true;
+                    break;
+                case 'Devtool Protocol':
+                    passed = /not using/i.test(val) ? true : null;
+                    break;
+                case 'Connection Rtt':
+                    if (/not defined/i.test(val)) { passed = null; break; }
+                    m = val.match(/Connection-rtt:\s*(\d+)/i);
+                    passed = !!m && parseInt(m[1], 10) !== 0;
+                    break;
+                case 'Time Elapse':
+                    m = val.match(/Time elapsed to close alert:\s*(\d+)/i);
+                    passed = !!m && parseInt(m[1], 10) >= 30;
+                    break;
+                case 'Broken Image':
+                    m = val.match(/width (\d+) and height (\d+)/i);
+                    passed = m ? !(m[1] === '0' && m[2] === '0') : true;
+                    break;
+                case 'Outer dimensions':
+                    m = val.match(/Outerheight:\s*(\d+) and outerwidth:\s*(\d+)/i);
+                    passed = m ? !(m[1] === '0' && m[2] === '0') : true;
+                    break;
+                case 'Permission':
+                    if (/undefined/i.test(val)) { passed = null; break; }
+                    passed = !(/"denied"/i.test(val) && /"prompt"/i.test(val));
+                    break;
+                case 'Mouse Move':
+                    passed = /move your mouse/i.test(val) ? null : /vary in mouse events/i.test(val);
+                    break;
+                case 'User Agent':
+                case 'App Version':
+                    passed = !lower.includes('headless');
+                    break;
+                default:
+                    // Unrecognized row: only flag explicit failure wording, never the
+                    // bare word "detected" (a healthy reading for several checks above).
+                    passed = !lower.includes('headless') && !lower.includes('fail');
             }
+
+            const entry = { name: name.substring(0, 80), value: val.substring(0, 100), passed };
+            if (passed === null) entry.severity = 'skip';
+            out.tests.push(entry);
         });
     }
     return out;
@@ -364,17 +1022,7 @@ async def test_infosimples(method: str) -> SiteResult:
         return result
 
     result.elapsed_ms = round((time.time() - start) * 1000)
-    for t in collected.get("tests", []):
-        name = t.get("name", "?")
-        passed = t.get("passed", False)
-        val = t.get("value", "")
-        result.tests.append(asdict(TestResult(name, passed, val, "pass" if passed else "fail")))
-        if passed:
-            result.passed += 1
-        else:
-            result.failed += 1
-    result.total = result.passed + result.failed
-    return result
+    return _append_collected_tests(result, collected)
 
 
 _AREYOUHEADLESS_JS = """() => {
@@ -406,12 +1054,18 @@ async def test_areyouheadless(method: str) -> SiteResult:
         return result
 
     result.elapsed_ms = round((time.time() - start) * 1000)
-    result.raw = {"response": collected.get("full_text", "")[:300]}
+    full_text = collected.get("full_text", "")
+    result.raw = {"response": full_text[:300]}
+
+    outage = _detect_outage(full_text)
+    if outage:
+        result.error = f"site unreachable ({outage})"
+        return result
 
     passed = collected.get("detected_as_not_headless", False)
     result.tests.append(asdict(TestResult(
         "headless_detection", passed,
-        collected.get("full_text", "")[:100],
+        full_text[:100],
         "pass" if passed else "fail"
     )))
     if passed:
@@ -738,6 +1392,11 @@ async def test_cloudflare(method: str) -> SiteResult:
         "title": data.get("title", ""),
         "has_content": data.get("has_content", False),
     }
+
+    outage = _detect_outage(data.get("text_snippet", ""))
+    if outage:
+        result.error = f"site unreachable ({outage})"
+        return result
 
     bypassed = data.get("has_content", False) and not data.get("has_challenge", True)
     result.tests.append(asdict(TestResult("CF JS Challenge Bypass", bypassed,
@@ -1314,12 +1973,16 @@ def _aggregate_for_json(results: list[dict]) -> dict:
     by_method: dict[str, dict] = {}
     for r in results:
         m, site = r["method"], r["site"]
-        bm = by_method.setdefault(m, {"_p": 0, "_t": 0, "sites": {}})
-        passed, total = r.get("passed", 0), r.get("total", 0)
+        bm = by_method.setdefault(m, {"_p": 0, "_scored": 0, "sites": {}})
+        passed, failed = r.get("passed", 0), r.get("failed", 0)
+        # Rate is over passed+failed only; skipped/warned tests never fired a
+        # real probe (e.g. main-world-only checks under alwaysIsolated) and
+        # must not dilute the pass rate as if they were failures.
+        scored = passed + failed
         bm["_p"] += passed
-        bm["_t"] += total
-        bm["sites"][site] = (passed / total) if total else 0.0
-    return {m: {"rate": (bm["_p"] / bm["_t"]) if bm["_t"] else 0.0, "sites": bm["sites"]}
+        bm["_scored"] += scored
+        bm["sites"][site] = (passed / scored) if scored else 0.0
+    return {m: {"rate": (bm["_p"] / bm["_scored"]) if bm["_scored"] else 0.0, "sites": bm["sites"]}
             for m, bm in by_method.items()}
 
 
@@ -1344,12 +2007,15 @@ def print_table(results: list[dict], show_details: bool = False):
             if r.get("error"):
                 print(f"{r['site']:<18} {r['method']:<14} {'':>5} {'':>5} {'':>5} {'ERROR':>8} {'':>7} {r['elapsed_ms']:>7}ms")
             else:
-                total = r.get("total", 0)
                 passed = r.get("passed", 0)
                 failed = r.get("failed", 0)
                 skipped = r.get("skipped", 0) + r.get("warned", 0)
-                rate = f"{passed/total*100:.0f}%" if total > 0 else "N/A"
-                score = f"{passed}/{total}" if total > 0 else "N/A"
+                # Rate/score are over passed+failed only: skipped/warned tests
+                # (e.g. main-world-only probes under alwaysIsolated) never fired
+                # and must not dilute the pass rate as if they were failures.
+                scored = passed + failed
+                rate = f"{passed/scored*100:.0f}%" if scored > 0 else "N/A"
+                score = f"{passed}/{scored}" if scored > 0 else "N/A"
                 print(f"{r['site']:<18} {r['method']:<14} {passed:>5} {failed:>5} {skipped:>5} {score:>8} {rate:>7} {r['elapsed_ms']:>7}ms")
 
     print()
@@ -1378,13 +2044,18 @@ def print_table(results: list[dict], show_details: bool = False):
     print("-" * len(header2))
     for m, agg in by_method.items():
         desc = METHODS.get(m, m)[:45]
-        total = agg["total_tests"]
-        rate = f"{agg['total_pass']/total*100:.0f}%" if total > 0 else "N/A"
+        # Rate is over passed+failed only; skipped/warned probes never fired
+        # and must not dilute it (see per-site rate above for the same fix).
+        scored = agg["total_pass"] + agg["total_fail"]
+        rate = f"{agg['total_pass']/scored*100:.0f}%" if scored > 0 else "N/A"
         sites_str = f"{agg['sites_ok']}/{agg['sites_ok'] + agg['sites_err']}"
         print(f"{m:<14} {desc:<45} {agg['total_pass']:>5} {agg['total_fail']:>5} {rate:>7} {sites_str:>6} {agg['total_ms']:>8}ms")
 
     print()
-    best = max(by_method.items(), key=lambda x: x[1]["total_pass"] / max(x[1]["total_tests"], 1))
+    best = max(
+        by_method.items(),
+        key=lambda x: x[1]["total_pass"] / max(x[1]["total_pass"] + x[1]["total_fail"], 1),
+    )
     print(f"  >>> Best stealth: {best[0]} ({METHODS.get(best[0], best[0])})")
     print()
 
@@ -1433,13 +2104,49 @@ async def run_benchmark(site_names: list[str], method_names: list[str]) -> list[
                 if sr.error:
                     print(f"  ERROR: {sr.error[:100]}")
                 else:
-                    print(f"  Score: {sr.passed}/{sr.total} pass, {sr.failed} fail, {sr.elapsed_ms}ms")
+                    # Score is over passed+failed only; skipped/warned probes
+                    # never fired and are reported separately, not folded in.
+                    scored = sr.passed + sr.failed
+                    extra = sr.skipped + sr.warned
+                    suffix = f", {extra} skip" if extra else ""
+                    print(f"  Score: {sr.passed}/{scored} pass, {sr.failed} fail{suffix}, {sr.elapsed_ms}ms")
             except Exception as e:
                 print(f"  EXCEPTION: {e}")
                 traceback.print_exc()
                 results.append(asdict(SiteResult(site=site_name, method=method_name, error=str(e)[:200])))
 
     return results
+
+
+def _rebrowser_patch_status() -> bool | None:
+    """Best-effort patch_rebrowser.is_patched() check; None if unavailable
+    (module missing, import error, etc.) rather than failing the run."""
+    try:
+        try:
+            from . import patch_rebrowser
+        except ImportError:
+            import patch_rebrowser
+        return patch_rebrowser.is_patched()
+    except Exception:
+        return None
+
+
+def _chrome_binary_version() -> str:
+    """Best-effort resolved Chrome/Chromium `--version` string; "" on any
+    failure (binary not found, exec error, timeout, ...) rather than failing
+    the run."""
+    try:
+        try:
+            from . import fetcher as _fetcher
+        except ImportError:
+            import fetcher as _fetcher
+        binary = _fetcher._find_chrome()
+        if not binary:
+            return ""
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=5)
+        return (proc.stdout or proc.stderr or "").strip()
+    except Exception:
+        return ""
 
 
 def main():
@@ -1482,6 +2189,8 @@ def main():
         "env": {
             "rebrowser_mode": os.environ.get("REBROWSER_PATCHES_RUNTIME_FIX_MODE", "not set"),
             "python": sys.version,
+            "rebrowser_patched": _rebrowser_patch_status(),
+            "chrome_version": _chrome_binary_version(),
         },
         "sites_tested": args.sites,
         "methods_tested": args.methods,

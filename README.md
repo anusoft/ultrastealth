@@ -1,7 +1,7 @@
 # Ultrastealth
 
 Ultrastealth is a standalone Python package for maximum-stealth browser automation.
-It uses `rebrowser-playwright` (with CDP leak fixes), real Google Chrome by default, Chromium fallback, headed Xvfb modes on Linux, and several advanced JS bypasses to avoid bot detection systems.
+It uses `rebrowser-playwright` (with CDP leak fixes), real Google Chrome by default, Chromium fallback, and headed Xvfb modes on Linux to avoid bot detection systems.
 
 ## Prerequisites
 - **Python 3.12+**
@@ -22,6 +22,16 @@ Python interpreter:
 ```bash
 PYTHON=/path/to/python3 ./install.sh
 ```
+
+You can also install directly from GitHub with curl and bash:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/anusoft/ultrastealth/main/install.sh | bash
+```
+
+This keeps the checkout at `~/.ultrastealth/src/ultrastealth` by default so the
+editable install remains valid. Override with `ULTRASTEALTH_INSTALL_DIR`,
+`ULTRASTEALTH_REF`, or `PYTHON` when needed.
 
 If the package is already installed, rerun the same browser install + patch step
 directly:
@@ -58,9 +68,13 @@ if __name__ == "__main__":
 
 ## Benchmark
 
-`bot_benchmark.py` scores Ultrastealth against ~15 bot-detection / fingerprint sites
+`bot_benchmark.py` scores Ultrastealth against 21 bot-detection / fingerprint sites
 (sannysoft, rebrowser, creepjs, deviceandbrowserinfo, iphey, fingerprint-scan,
-cloudflare, …). Run it under a virtual display:
+cloudflare, reCAPTCHA/Turnstile demos, …). Current baseline: **96% (105/109)** —
+`docs/research/bot_benchmark_ultrastealth_phase_a_baseline.json`. Scoring counts
+`pass`/`fail` only; an untriggered probe (`skip`) and an unreachable site (`error`)
+are both reported separately rather than counted as a failure. Run it under a
+virtual display:
 
 ```bash
 # one-time: start Xvfb on :99 (or use your own display)
@@ -68,14 +82,16 @@ Xvfb :99 -screen 0 1920x1080x24 &
 
 DISPLAY=:99 python3 bot_benchmark.py                      # all sites
 DISPLAY=:99 python3 bot_benchmark.py --sites sannysoft rebrowser
+python3 bot_benchmark.py --methods ultrastealth patchright   # compare engines
 python3 bot_benchmark.py --compare bot_benchmark_results.json   # reprint table
 ```
 
 Each site has its own extraction JS + scorer; results are written to JSON and printed
 as a table. Notes: `pixelscan`/`incolumitas` only return a verdict from a residential
-IP; `cloudflare` (nowsecure.nl) needs the bundled Turnstile solver. The default
-fingerprint is intentionally the consistent real-Chrome one — set
-`ULTRASTEALTH_BYPASSES=on` to additionally layer the (optional) JS spoofs.
+IP; `cloudflare` (nowsecure.nl) needs the bundled Turnstile solver. The fingerprint
+is the consistent, unmodified real-Chrome one — benchmarking showed it beats a
+spoofed fingerprint on every fingerprint site tested, so there is no JS-spoofing
+layer to opt into.
 
 ## Browser Runner Defaults
 
@@ -163,7 +179,7 @@ last command; `0` = never close, default `1800`), `ULTRASTEALTH_DAEMON_DIR` (whe
 the socket/pid/log live; the socket auto-relocates to a short temp path if this
 dir would exceed the OS's Unix-socket length limit). Profile selection uses the
 same `ULTRASTEALTH_RUNNER` / `_USER_DATA_DIR` / `_PROFILE_DIRECTORY` as the rest of
-the stack. The stealth/bypass launch path is unchanged — the daemon-driven browser
+the stack. The stealth launch path is unchanged — the daemon-driven browser
 passes the same bot checks as `UltrastealthFetcher`.
 
 See the bundled `fast-browser` skill (`skills/fast-browser/`) for the agent
@@ -271,22 +287,29 @@ Claude calls: browser_network_detail(request_id=3)
 → Returns full headers and body for a specific request
 ```
 
-## Included Bypasses
-The `ultrastealth/bypasses` folder includes injected scripts to spoof webgl, mock canvassing, normalize plugins, bypass `Runtime.enable`, and standard headless fingerprints. These are automatically loaded by the Fetcher.
-
 ## Driver Fingerprint Patch (`patch_rebrowser.py`)
 
-`rebrowser-playwright`'s bundled Node driver leaks two identifiers that detectors
+`rebrowser-playwright`'s bundled Node driver leaks four identifiers that detectors
 (e.g. `bot-detector.rebrowser.net`) probe for in the page context:
 
 - `globalThis.__pwInitScripts` — the init-script dedup map, created by the driver
   *before* any bypass runs (so a JS bypass can't reliably hide it).
 - `UtilityScript` — the class wrapping every `page.evaluate`; its name leaks into
   `Error().stack` captured by page JS.
+- `globalThis.__playwright_builtins__` — a cache of native `setTimeout`/`Date`/`Map`/etc.
+  that every injected script recreates before user scripts run, so it can't be hidden
+  by a JS bypass either.
+- `globalThis.__playwright__binding__` — the CDP `Runtime.addBinding` channel name the
+  driver exposes on every page regardless of whether the caller uses `exposeBinding`;
+  a JS bypass races the CDP call and can only win after the property already existed.
 
-`patch_rebrowser.py` renames both at the driver source (`__pwInitScripts → __execGuards`,
-`UtilityScript → ExecutionProxy`), consistently so functionality is preserved. This
-lifts the rebrowser bot-detector score from **6/10 → 8/10**.
+`patch_rebrowser.py` renames all four at the driver source (`__pwInitScripts → __execGuards`,
+`UtilityScript → ExecutionProxy`, `__playwright_builtins__ → __nativeRefs`,
+`__playwright__binding__ → __execChannel`), consistently so functionality is preserved.
+With all four renames applied, `bot-detector.rebrowser.net` scores **6/6 pass, 0 fail**
+(4 of its 10 probes need main-world access that `alwaysIsolated` mode denies by design —
+see below — and are correctly reported as `skip`, not a failure). Full 21-site benchmark:
+**96% (105/109)** — `docs/research/bot_benchmark_ultrastealth_phase_a_baseline.json`.
 
 ```bash
 ultrastealth-install --skip-browser-install        # apply after dependency upgrades
@@ -317,3 +340,28 @@ Trade-off: isolated `evaluate` can read the shared **DOM** (`querySelector`,
 main-world JS globals (`window.someAppState`). Ultrastealth sets this mode by
 default before launch; set `REBROWSER_PATCHES_RUNTIME_FIX_MODE=addBinding` if you
 need main-world JS access.
+
+## Alternative Engine: patchright (opt-in)
+
+`UltrastealthFetcher(engine="patchright")` / `ULTRASTEALTH_ENGINE=patchright` switches
+the automation driver from `rebrowser-playwright` to `patchright`, an independently
+maintained undetected-Playwright fork. Head-to-head across all 21 benchmark sites it
+scores identically to the default engine (96%, same failures) but runs ~22% faster
+overall — most of that on slow challenge-solve sites (`cloudflare`, `egp_announcements`).
+
+**It is not a drop-in replacement for the default.** Patchright's `Page` has no
+`accessibility` attribute — upstream Playwright removed it by the version patchright
+tracks — so it cannot back the `browser_snapshot`/`browser_batch` `eN` ref system this
+project's MCP server and CLI depend on. Use it only through `UltrastealthFetcher.fetch()`
+/ `fetch_and_evaluate()`, or `bot_benchmark.py --methods patchright`. Full verified
+findings: `CLAUDE.md`.
+
+## Browser Ops
+
+Beyond the CLI/MCP tools listed above, `browser_core.py`'s op registry (reachable via
+`ultrastealth browser <op>`, the Python `client.connect()` API, and `browser_batch`
+steps) also includes:
+
+- `cookies` — the current browser context's cookies.
+- `find` — best-matching interactive element `eN` ref for a natural-language-ish
+  query, scored against the accessibility snapshot's roles/names (no LLM call).

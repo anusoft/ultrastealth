@@ -2,7 +2,7 @@
 Ultrastealth MCP Server
 ========================
 Exposes maximum-stealth browser automation as MCP tools for Claude Code.
-Uses UltrastealthFetcher (rebrowser-playwright + Xvfb + JS bypasses).
+Uses UltrastealthFetcher (rebrowser-playwright + Xvfb).
 
 Tools modeled after browser-use MCP:
 - browser_navigate, browser_click, browser_type, browser_get_state,
@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 
 import psutil
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 # Add parent dir to path so ultrastealth can be imported
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -58,7 +58,7 @@ from client import UltrastealthClient, default_sock  # route to the warm daemon 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("ultrastealth.mcp")
 
-mcp = FastMCP(
+mcp = MCPServer(
     "ultrastealth",
     instructions="Maximum-stealth browser automation. Use browser_navigate to open pages, "
     "browser_get_state to see interactive elements, browser_click/browser_type to interact, "
@@ -139,27 +139,64 @@ def _normalize_runner(runner: str | None) -> str | None:
     return runner.strip().lower().replace("_", "-").replace(" ", "-")
 
 
+def _runner_uses_temp_profile(runner: str | None) -> bool:
+    return runner in {
+        "chrome+temp-profile",
+        "chrome:temp-profile",
+        "chrome-temp-profile",
+        "chromium+temp-profile",
+        "chromium:temp-profile",
+        "chromium-temp-profile",
+    }
+
+
+def _profile_args_supplied(
+    runner: str | None = None,
+    user_data_dir: str | None = None,
+    profile_directory: str | None = None,
+) -> bool:
+    return any(value is not None for value in (runner, user_data_dir, profile_directory))
+
+
 def _profile_config(
     runner: str | None = None,
     user_data_dir: str | None = None,
     profile_directory: str | None = None,
 ) -> tuple[str | None, str | None, str | None]:
-    env_user_data_dir = _env_value("ULTRASTEALTH_USER_DATA_DIR")
+    env_runner = _env_value("ULTRASTEALTH_RUNNER")
+    effective_runner = _normalize_runner(runner if runner is not None else env_runner)
+    use_env_profile = not _runner_uses_temp_profile(effective_runner)
+    env_user_data_dir = _env_value("ULTRASTEALTH_USER_DATA_DIR") if use_env_profile else None
+    env_profile_directory = (
+        _env_value("ULTRASTEALTH_PROFILE_DIRECTORY") if use_env_profile else None
+    )
     effective_user_data_dir = _normalize_chromium_user_data_dir(
         user_data_dir if user_data_dir is not None else env_user_data_dir
     )
     effective_profile_directory = (
         profile_directory
         if profile_directory is not None
-        else _env_value("ULTRASTEALTH_PROFILE_DIRECTORY")
+        else env_profile_directory
     )
-    env_runner = _env_value("ULTRASTEALTH_RUNNER")
-    effective_runner = _normalize_runner(runner if runner is not None else env_runner)
     return (
         effective_runner,
         effective_user_data_dir,
         effective_profile_directory,
     )
+
+
+def _requested_profile_config(
+    runner: str | None = None,
+    user_data_dir: str | None = None,
+    profile_directory: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    if _fetcher is not None and not _profile_args_supplied(
+        runner=runner,
+        user_data_dir=user_data_dir,
+        profile_directory=profile_directory,
+    ):
+        return _browser_config
+    return _profile_config(runner, user_data_dir, profile_directory)
 
 
 def _profile_requested(config: tuple[str | None, str | None, str | None]) -> bool:
@@ -252,7 +289,7 @@ async def _ensure_browser(
 ):
     """Lazily start the browser on first tool call."""
     global _fetcher, _page, _browser_config, _session_start, _request_count, _active_tab_id, _browser_wedged
-    requested_config = _profile_config(runner, user_data_dir, profile_directory)
+    requested_config = _requested_profile_config(runner, user_data_dir, profile_directory)
     if _browser_wedged:
         log.warning("Browser flagged wedged; hard-killing before restart")
         _hard_kill_browser()
@@ -640,7 +677,9 @@ async def browser_batch(steps: str) -> str:
     [{"op":"navigate","url":"https://x"},{"op":"wait","selector":"#ready"},
      {"op":"click","target":"e2"},{"op":"snapshot"}].
     Ops: navigate, reload, go_back, wait, click, type, fill, press, hover, focus,
-    scroll_into_view, select, scroll, get, is, evaluate, snapshot, screenshot.
+    scroll_into_view, select, scroll, get, is, evaluate, snapshot, screenshot,
+    cookies, find. `find` takes {"op":"find","query":"..."} and returns the
+    best-matching element ref (by role/name similarity) plus a score.
     `target` is a snapshot ref (e2) or a CSS selector. Stops on the first error.
     Prefer this over many single-action calls; end with a "snapshot" step to get
     fresh refs back in the same response."""
@@ -2034,6 +2073,7 @@ async def browser_restart(
     global _fetcher, _page, _browser_config, _session_start, _request_count, _active_tab_id
 
     _next_request()
+    requested_config = _requested_profile_config(runner, user_data_dir, profile_directory)
     old_url = None
     if _page and not _page.is_closed():
         old_url = _page.url
@@ -2048,7 +2088,6 @@ async def browser_restart(
         _fetcher = None
         _page = None
 
-    requested_config = _profile_config(runner, user_data_dir, profile_directory)
     _fetcher = UltrastealthFetcher(**_fetcher_kwargs(requested_config))
     await _fetcher.start()
     _page = await _fetcher._context.new_page()
@@ -2102,9 +2141,7 @@ def main():
     if args.transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        mcp.run(transport="streamable-http")
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@ class FakePage:
         self.enabled_by_selector = {"#submit": True}
         self.checked_by_selector = {"#terms": True}
         self.keyboard = _Keyboard(self)
+        self.context = None  # set by make_fetcher()/FakeContext.new_page()
         self._closed = False
 
     def is_closed(self):
@@ -139,11 +140,18 @@ class FakePage:
 class FakeContext:
     def __init__(self, page):
         self.pages = [page]
+        self.cookies_value = [
+            {"name": "sid", "value": "abc123", "domain": "example.com", "path": "/"},
+        ]
 
     async def new_page(self):
         p = FakePage()
+        p.context = self
         self.pages.append(p)
         return p
+
+    async def cookies(self):
+        return self.cookies_value
 
 
 _DEFAULT_TREE = {
@@ -157,4 +165,6 @@ _DEFAULT_TREE = {
 
 def make_fetcher(page):
     """A minimal fake fetcher whose _context yields fresh pages."""
-    return SimpleNamespace(_context=FakeContext(page), user_data_dir=None)
+    ctx = FakeContext(page)
+    page.context = ctx
+    return SimpleNamespace(_context=ctx, user_data_dir=None)

@@ -2,7 +2,7 @@
 Ultrastealth Browser Automation
 ================================
 Maximum stealth browser using rebrowser-playwright (CDP leak fix) +
-Xvfb headed mode + enhanced JS bypasses + consistent fingerprint profile.
+Xvfb headed mode + consistent fingerprint profile.
 
 Combines all known anti-detection techniques for 95%+ pass rate on bot detection sites.
 
@@ -34,9 +34,6 @@ log = logging.getLogger("ultrastealth")
 # Cloudflare challenge iframe URL pattern (from Scrapling)
 _CF_PATTERN = re.compile(r"^https://challenges\.cloudflare\.com/cdn-cgi/challenge-platform/")
 
-# Directory containing our enhanced JS bypass scripts
-BYPASSES_DIR = Path(__file__).parent / "bypasses"
-
 # Xvfb display number
 XVFB_DISPLAY = os.environ.get("ULTRASTEALTH_DISPLAY", ":99")
 FALLBACK_SCREEN_SIZE = (1440, 900)
@@ -58,6 +55,19 @@ CHROME_PATHS = [
 
 DEFAULT_RUNNER = "chrome+default-profile"
 DEFAULT_PROFILE_DIRECTORY = "Default"
+
+# Automation engine selection — orthogonal to the runner (browser + profile
+# choice) above. Both engines are Playwright-API-compatible forks selected
+# via UltrastealthFetcher(engine=...) or the ULTRASTEALTH_ENGINE env var;
+# every other stealth mechanism (flags, profile handling, Xvfb, persona/UA
+# logic) is shared unchanged between them — only the driver import (and, for
+# rebrowser, the on-disk driver patch) differs. See docs/plan/prior/
+# 02-playwright-patching.md for the head-to-head research and CLAUDE.md for
+# the verified findings from adding patchright support.
+ENGINE_REBROWSER = "rebrowser"
+ENGINE_PATCHRIGHT = "patchright"
+DEFAULT_ENGINE = ENGINE_REBROWSER
+_VALID_ENGINES = {ENGINE_REBROWSER, ENGINE_PATCHRIGHT}
 
 
 def _find_chrome() -> Optional[str]:
@@ -122,6 +132,25 @@ def _normalize_runner(runner: Optional[str]) -> str:
     return value.strip().lower().replace("_", "-").replace(" ", "-")
 
 
+def _normalize_engine(engine: Optional[str]) -> str:
+    """Normalize the requested automation engine.
+
+    Mirrors _normalize_runner's permissive style: unrecognized values fall
+    back to the default engine (with a warning) rather than raising, so a
+    typo'd env var degrades to today's known-good behavior instead of
+    crashing a long-running process.
+    """
+    value = (engine or DEFAULT_ENGINE).strip().lower().replace("_", "-").replace(" ", "-")
+    if value not in _VALID_ENGINES:
+        log.warning(
+            "Unknown engine %r (from engine= or ULTRASTEALTH_ENGINE); falling back "
+            "to %r. Valid values: %s",
+            engine, DEFAULT_ENGINE, sorted(_VALID_ENGINES),
+        )
+        return DEFAULT_ENGINE
+    return value
+
+
 def _runner_uses_default_profile(runner: str) -> bool:
     return runner in {
         "chrome",
@@ -134,6 +163,17 @@ def _runner_uses_default_profile(runner: str) -> bool:
         "chromium+default-profile",
         "chromium:default-profile",
         "chromium-default-profile",
+    }
+
+
+def _runner_uses_temp_profile(runner: str) -> bool:
+    return runner in {
+        "chrome+temp-profile",
+        "chrome:temp-profile",
+        "chrome-temp-profile",
+        "chromium+temp-profile",
+        "chromium:temp-profile",
+        "chromium-temp-profile",
     }
 
 
@@ -344,72 +384,6 @@ def _cleanup_stale_chrome_singletons(user_data_dir: str) -> bool:
     return removed
 
 
-def _load_bypass_scripts() -> str:
-    """Load and concatenate the JS bypass scripts. Default: OFF.
-
-    Benchmark evidence (bot_benchmark.py, 2026-06): on this real-Chrome-on-Linux stack
-    the clean browser fingerprint is already consistent and beats the spoofed one on
-    EVERY fingerprint site (devbrowserinfo 21/21 vs 19/21, fingerprint-scan pass vs
-    95/100 bot-risk, sannysoft 31/31 vs 30/31, rebrowser 6/10 vs 5/10). The JS spoofs
-    (Windows-ish GPU, instance-level navigator overrides, fragile worker patch) add more
-    inconsistencies than they hide. The driver-level stealth that actually wins — real
-    Chrome + Xvfb headful + rebrowser patch + alwaysIsolated — does not live here.
-
-    These scripts were also silently broken for a long time (a syntax error in
-    webdriver_fully.js made V8 reject the whole init script), so production has de-facto
-    run with them OFF. This makes that explicit. They are now repaired and undetectable
-    (Proxy-based native masking, OS-consistent values, IIFE-isolated) for the targets
-    where the GPU/canvas spoofs are specifically needed — opt in with
-    ULTRASTEALTH_BYPASSES=on.
-    """
-    if os.environ.get("ULTRASTEALTH_BYPASSES", "off").lower() not in ("on", "1", "true"):
-        return ""
-
-    scripts = []
-
-    # Load in specific order (dependencies first)
-    order = [
-        "_native_mask.js",
-        "webdriver_fully.js",
-        "window_chrome.js",
-        "navigator_plugins.js",
-        "playwright_fingerprint.js",
-        "screen_props.js",
-        "notification_permission.js",
-        "runtime_enable_fix.js",
-        "hardware_profile.js",
-        "webgl_spoof.js",
-        "canvas_noise.js",
-        "audio_noise.js",
-        "worker_consistency.js",
-    ]
-
-    for filename in order:
-        path = BYPASSES_DIR / filename
-        if not path.exists():
-            log.warning(f"Bypass script not found: {path}")
-            continue
-        body = path.read_text()
-        if filename == "_native_mask.js":
-            # Must stay at the shared top scope so its `const __usMask` is visible to
-            # every later bypass. (It is a lexical binding, not a window property —
-            # invisible to page JS.)
-            scripts.append(f"// === {filename} ===\n{body}")
-        else:
-            # Isolate each bypass in its own IIFE + try/catch. The scripts are
-            # concatenated into ONE init script, so without this:
-            #   - a thrown exception in any bypass would abort the whole remaining chain;
-            #   - a top-level `return` (window_chrome.js has several, reached when
-            #     window.chrome is absent — e.g. insecure origins) would return from the
-            #     entire init function, silently skipping every later spoof.
-            # An IIFE contains both `return` and `throw`, making the spoofs independent.
-            scripts.append(
-                f"// === {filename} ===\n(function(){{\ntry {{\n{body}\n}} catch (e) {{}}\n}})();"
-            )
-
-    return "\n\n".join(scripts)
-
-
 # Stealth Chromium flags (subset of Scrapling's STEALTH_ARGS + our additions)
 STEALTH_FLAGS = [
     "--test-type",
@@ -430,8 +404,6 @@ STEALTH_FLAGS = [
     "--disable-cloud-import",
     "--disable-print-preview",
     "--disable-dev-shm-usage",
-    "--disable-component-update",
-    "--metrics-recording-only",
     "--disable-crash-reporter",
     "--disable-partial-raster",
     "--disable-gesture-typing",
@@ -450,14 +422,12 @@ STEALTH_FLAGS = [
     "--enable-surface-synchronization",
     "--disable-image-animation-resync",
     "--disable-renderer-backgrounding",
-    "--disable-ipc-flooding-protection",
     "--prerender-from-omnibox=disabled",
     "--safebrowsing-disable-auto-update",
     "--disable-offer-upload-credit-cards",
     "--disable-background-timer-throttling",
     "--disable-new-content-rendering-timeout",
     "--run-all-compositor-stages-before-draw",
-    "--disable-client-side-phishing-detection",
     "--disable-backgrounding-occluded-windows",
     "--disable-layer-tree-host-memory-pressure",
     "--no-first-run",
@@ -465,24 +435,20 @@ STEALTH_FLAGS = [
     "--no-default-browser-check",
     "--no-pings",
     "--noerrdialogs",
-    "--disable-default-apps",
     "--disable-datasaver-prompt",
     "--disable-external-intent-requests",
     "--disable-focus-on-load",
     "--disable-infobars",
     "--disable-search-engine-choice-screen",
     "--disable-window-activation",
-    "--allow-pre-commit-input",
     "--hide-crash-restore-bubble",
     "--install-autogenerated-theme=0,0,0",
     "--silent-debugger-extension-api",
     "--simulate-outdated-no-au=Tue, 31 Dec 2099 23:59:59 GMT",
     "--suppress-message-center-popups",
-    "--unsafely-disable-devtools-self-xss-warnings",
     "--autoplay-policy=user-gesture-required",
     "--disable-offer-store-unmasked-wallet-cards",
     "--disable-blink-features=AutomationControlled",
-    "--disable-component-extensions-with-background-pages",
     "--disable-extensions-http-throttling",
     "--extensions-on-chrome-urls",
     "--enable-features=NetworkService,NetworkServiceInProcess",
@@ -503,15 +469,37 @@ HARMFUL_FLAGS = [
 ]
 
 
+# NOTE (history): an earlier version of this fetcher also injected a JS
+# "bypass" chain (bypasses/*.js — canvas/WebGL/audio noise, hardware profile,
+# navigator/plugin spoofing, etc.) gated behind ULTRASTEALTH_BYPASSES (default
+# off). It was removed rather than repaired: this project's own benchmark
+# evidence (bot_benchmark.py, 2026-06) showed the clean, unmodified real-Chrome
+# fingerprint already beat the spoofed one on EVERY fingerprint site tested
+# (devbrowserinfo 21/21 vs 19/21, fingerprint-scan pass vs 95/100 bot-risk,
+# sannysoft 31/31 vs 30/31, rebrowser 6/10 vs 5/10) — the JS spoofs added more
+# inconsistencies than they hid. The driver-level stealth that actually wins —
+# real Chrome + Xvfb headful + rebrowser patch + alwaysIsolated — lives below,
+# not in an injected script chain. If a future persona/fingerprint system is
+# built here, re-run that benchmark comparison before enabling it by default.
 class UltrastealthFetcher:
     """Maximum stealth async browser automation.
 
     Combines:
-    - rebrowser-playwright (fixes Runtime.Enable CDP leak)
+    - rebrowser-playwright (fixes Runtime.Enable CDP leak) by default, or
+      patchright as an opt-in alternative engine (engine="patchright" /
+      ULTRASTEALTH_ENGINE=patchright — see ENGINE_* constants above)
     - Xvfb headed mode (eliminates headless detection)
         - Real Chrome/Chromium binary
-    - Enhanced JS bypasses (worker consistency, canvas/WebGL/audio noise, hardware profile)
     - Consistent device fingerprint profile
+
+    Engine caveat (verified, not assumed — see CLAUDE.md for the full
+    write-up): patchright's Page object has no `accessibility` attribute at
+    all (upstream Playwright removed page.accessibility.snapshot() by the
+    version patchright tracks). browser_core.py's entire eN snapshot/ref
+    system depends on that call, so the patchright engine is NOT currently
+    usable through browser_core.py/MCP browser_snapshot — only through this
+    class's own fetch()/fetch_and_evaluate() (and bot_benchmark.py's
+    "patchright" method), which never call page.accessibility.
     """
 
     def __init__(
@@ -524,16 +512,22 @@ class UltrastealthFetcher:
         runner: Optional[str] = None,
         profile_directory: Optional[str] = None,
         fallback_to_temp_profile: bool = True,
+        engine: Optional[str] = None,
     ):
         self.headless = headless
         self.proxy = proxy
         self.timeout = timeout
+        env_engine = os.environ.get("ULTRASTEALTH_ENGINE")
+        self.engine = _normalize_engine(engine or env_engine)
         raw_env_user_data_dir = os.environ.get("ULTRASTEALTH_USER_DATA_DIR")
         env_user_data_dir = _normalize_chromium_user_data_dir(raw_env_user_data_dir)
         env_profile_directory = os.environ.get("ULTRASTEALTH_PROFILE_DIRECTORY")
         raw_env_runner = os.environ.get("ULTRASTEALTH_RUNNER")
         env_runner = raw_env_runner
         self.runner = _normalize_runner(runner or env_runner)
+        if _runner_uses_temp_profile(self.runner):
+            env_user_data_dir = None
+            env_profile_directory = None
         self.explicit_chrome_profile_requested = any(
             value is not None
             for value in (
@@ -560,7 +554,6 @@ class UltrastealthFetcher:
         self._context = None
         self._xvfb_proc = None
         self._temp_dir = None
-        self._bypass_scripts = _load_bypass_scripts()
 
     async def __aenter__(self):
         await self.start()
@@ -571,7 +564,37 @@ class UltrastealthFetcher:
 
     async def start(self):
         """Launch browser with maximum stealth configuration."""
-        _ensure_rebrowser_patched()
+        if self.engine == ENGINE_REBROWSER:
+            _ensure_rebrowser_patched()
+        # else ENGINE_PATCHRIGHT: patch_rebrowser.py patches specific files
+        # inside the *installed rebrowser_playwright package's* driver
+        # (lib/server/page.js, lib/server/javascript.js, lib/generated/
+        # *Source.js — see _driver_root() in patch_rebrowser.py, which
+        # hard-imports rebrowser_playwright). patchright ships a completely
+        # different, single-file driver bundle (lib/coreBundle.js) with none
+        # of those paths, so running the patcher here would either import-
+        # error or (if pointed at the wrong root) silently patch nothing —
+        # it must not be invoked for this engine.
+        #
+        # This is not a gap: patchright's own patch layer covers the same
+        # leak vectors differently, and the difference was verified directly
+        # against the installed driver bundle (grep counts against
+        # .../patchright/driver/package/lib/coreBundle.js), not assumed from
+        # docs/plan/prior/02-playwright-patching.md:
+        #   - __pwInitScripts: 0 occurrences — the dedup map is designed out
+        #     of the driver entirely, not renamed like patch_rebrowser.py does.
+        #   - __playwright__binding__: 0 occurrences — the global CDP binding
+        #     channel is deleted outright, not raced with a JS `delete` like
+        #     ultrastealth's old bypass script did.
+        #   - UtilityScript: 12 occurrences — NOT renamed. patchright instead
+        #     relies on evaluate()'s `isolated_context=True` default so
+        #     UtilityScript never executes in a page-observable world. This
+        #     is the one vector patch_rebrowser.py's rename still covers that
+        #     patchright does not (relevant if a caller passes
+        #     isolated_context=False).
+        #   - __playwright_builtins__: 0 occurrences — absent, consistent
+        #     with patchright vendoring its own builtins-free serializer
+        #     rather than reusing the helper that leaks this global.
 
         # Start Xvfb if needed (for headed mode without a display)
         if not self.headless and _is_linux():
@@ -585,8 +608,15 @@ class UltrastealthFetcher:
         # main-world JS access. setdefault → an explicit env value always wins.
         os.environ.setdefault("REBROWSER_PATCHES_RUNTIME_FIX_MODE", "alwaysIsolated")
 
-        # Use rebrowser-playwright for CDP leak fix
-        from rebrowser_playwright.async_api import async_playwright
+        # Use rebrowser-playwright (default: CDP Runtime.enable leak fix) or
+        # patchright (opt-in alternative engine — see ENGINE_* constants /
+        # class docstring). Every other stealth mechanism below (flags,
+        # profile handling, Xvfb, persona/UA logic) is shared unchanged
+        # between engines; only this import differs.
+        if self.engine == ENGINE_PATCHRIGHT:
+            from patchright.async_api import async_playwright
+        else:
+            from rebrowser_playwright.async_api import async_playwright
 
         self._playwright = await async_playwright().start()
 
@@ -725,9 +755,6 @@ class UltrastealthFetcher:
                 self.user_data_dir = None
                 self.owns_user_data_dir = False
                 raise
-
-        # Inject stealth scripts into all new pages
-        await self._context.add_init_script(self._bypass_scripts)
 
         log.info(f"Ultrastealth browser started (headless={use_headless})")
 

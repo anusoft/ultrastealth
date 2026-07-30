@@ -1,0 +1,126 @@
+# Prior art: browser fingerprint generation, injection & detection
+
+> Thesis: hand-written per-signal patches vs generated, internally-consistent personas.
+
+**Survey date:** 2026-07-30. Sources read in full: all 13 scripts in [`bypasses/`](../../../bypasses/); `apify/fingerprint-suite` ([generator](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/fingerprint-generator/src/fingerprint-generator.ts), [injector](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/fingerprint-injector/src/fingerprint-injector.ts), [801-line utils](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/fingerprint-injector/src/utils.js)); `fingerprintjs/fingerprintjs` [`src/sources/*`](/Users/mac/Projects/_prior-art/fingerprintjs/src/sources/) (43 entropy sources, enumerated from [`index.ts`](/Users/mac/Projects/_prior-art/fingerprintjs/src/sources/index.ts)); [`niespodd/browser-fingerprinting/README.md`](/Users/mac/Projects/_prior-art/browser-fingerprinting/README.md).
+
+> **Finding that reframes everything below (confirmed from source).** [`fetcher.py:376`](../../../fetcher.py) gates the entire bypass chain behind `ULTRASTEALTH_BYPASSES`, **default `off`**. [`bot_benchmark.py:197-213`](../../../bot_benchmark.py) instantiates a bare `UltrastealthFetcher()` and never sets that variable. **The 91% (105/116) benchmark score was earned with all 13 scripts disabled.** Every gap in the matrix below is therefore *two* gaps: the signal the script does not cover, and the fact that the script it does cover is not running.
+
+## Signal coverage matrix
+
+| Signal | Ultrastealth (file) | fingerprint-suite | fingerprintjs measures | GAP? |
+|---|---|---|---|---|
+| Canvas 2D (`toDataURL`/`toBlob`/`getImageData`) | ✅ `canvas_noise.js` — seeded 20/10-px noise | ❌ none (README calls noise 🤮) | ✅ `canvas.ts` (winding + geometry + text) | Noise ≠ persona; per-load reseed makes hash unstable across pages |
+| Canvas `winding` / `isPointInPath` | ❌ | ❌ | ✅ `canvas.ts` | Untouched (harmless) |
+| WebGL unmasked vendor/renderer | ✅ `webgl_spoof.js` (hardcoded RTX 3060 / Linux ANGLE) | ✅ `overrideWebGl` from generated `videoCard` | ✅ `webgl.ts` | Static string vs sampled pair |
+| WebGL `getParameter` numeric params (~80) | ❌ passthrough | ❌ passthrough | ✅ `webgl.ts` `validContextParameters` (80 constants) | **GAP** — real values still say SwiftShader/llvmpipe |
+| WebGL shader precisions, extensions list, ctx attributes | ❌ | ❌ | ✅ `webgl.ts` | **GAP** — README lists "WebGL extensions profiling" as an unsolved ❌ |
+| WebGL `getExtension` | ⚠️ `webgl_spoof.js` returns a **plain object** for `WEBGL_debug_renderer_info`, not a `WEBGLDebugRendererInfo` instance | ✅ reads the real extension | ✅ | **GAP** — `constructor.name`/prototype probe |
+| AudioContext render hash | ✅ `audio_noise.js` (`Math.random`, unseeded) | ❌ | ✅ `audio.ts` | Unseeded → unstable per call |
+| `AudioContext.baseLatency` | ❌ | ❌ | ✅ `audio_base_latency.ts` | Minor |
+| Fonts (CSS metric probing) | ❌ | ⚠️ generated in `Fingerprint.fonts` but **never injected** | ✅ `fonts.ts` (52-font list), `font_preferences.ts` | **GAP both sides** — README: font backend leaks host OS |
+| `screen.{width,height,avail*,colorDepth,pixelDepth}` | ⚠️ via Playwright `screen` option only | ✅ `overrideInstancePrototype(window.screen, …)` | ✅ `screen_resolution.ts`, `color_depth.ts` | `availTop/availLeft/pixelDepth` unmanaged |
+| `window.{outer,inner}*`, `screenX`, `devicePixelRatio` | ⚠️ `screen_props.js` — **hardcoded 1313×754, screenX 19, dpr 2** | ✅ same reassign technique, values sampled | ✅ `screen_frame.ts` | **GAP** — hardcoded, contradicts `--window-size` |
+| `navigator.webdriver` | ✅ `webdriver_fully.js` (proto getter + Proxy mask) | ✅ | — | Best-in-class here |
+| `navigator.platform` | ✅ `hardware_profile.js` → `'Linux x86_64'` | ✅ sampled | ✅ `platform.ts` | **Hardcoded; see consistency section** |
+| `navigator.deviceMemory` | ✅ `hardware_profile.js` → 8 | ✅ sampled | ✅ `device_memory.ts` | ok |
+| `navigator.hardwareConcurrency` | ⚪ **deliberately** not patched — documented abstention to avoid a main-thread/worker mismatch | ⚠️ sampled but **main-thread only** (no worker reach) | ✅ `hardware_concurrency.ts` | Ultrastealth's abstention is the *safer* position; README also cites the `core-estimator` timing attack as ❌ unsolved |
+| `navigator.maxTouchPoints` / touch events | ✅ `hardware_profile.js` → 0 | ✅ sampled | ✅ `touch_support.ts` (`maxTouchPoints` + `TouchEvent` + `ontouchstart`) | **GAP** — `ontouchstart`/`TouchEvent` not aligned with the forced 0 |
+| `navigator.plugins` | ✅ `navigator_plugins.js` (5 PDF plugins) | ✅ `fixPluginArray` (1 plugin) | ✅ `plugins.ts` | **GAP** — defined on the **instance**, and plugins have no `length`/mimeType children |
+| `navigator.mimeTypes` | ❌ | ❌ | ✅ (via `plugins.ts` child iteration) | **GAP** — 5 plugins with 0 mimeTypes is a contradiction |
+| `navigator.languages` / `language` | ❌ main thread; ✅ **workers only** (`worker_consistency.js` → `['en-US','en']`) | ✅ from `accept-language` | ✅ `languages.ts` | **GAP + active contradiction** (see below) |
+| `navigator.userAgentData` (low + high entropy) | ❌ | ✅ `overrideUserAgentData` incl. `getHighEntropyValues` trap | ✅ `user_agent_data.ts` (GREASE-aware) | **GAP** — README lists Client Hints as a ✔️ that stealth plugins already solved |
+| `navigator.{vendor,product,productSub,appVersion,oscpu,doNotTrack,appName}` | ❌ | ✅ all sampled | ✅ `vendor.ts`, `os_cpu.ts`, `vendor_flavors.ts` | **GAP** — FPScanner checks `productSub === '20030107'` |
+| `navigator.pdfViewerEnabled`, `globalPrivacyControl`, Bluetooth, installedApps | ❌ | ✅ `ExtraProperties` | ✅ `pdf_viewer_enabled.ts` | **GAP** |
+| `navigator.connection` | ✅ `hardware_profile.js` (instance-level) | ❌ | ❌ | ok-ish |
+| Battery API | ✅ `hardware_profile.js` (proto + Proxy) | ✅ `overrideBattery` | ❌ | Ultrastealth is *better* here |
+| Timezone / `Intl.DateTimeFormat` | ⚠️ Playwright `timezone_id: America/New_York` only | ✅ `overrideIntlAPI` wraps every `Intl` constructor | ✅ `timezone.ts`, `date_time_locale.ts` | **GAP** — hardcoded TZ, no IP correlation |
+| Media codecs (`canPlayType`) | ❌ | ✅ `overrideCodecs` (with the `avc1.42E01E` Chromium fix) | ❌ (FPScanner does) | **GAP** |
+| WebRTC / ICE candidate IPs | ❌ | ✅ optional `blockWebRTC()` recursive Proxy | ❌ | **GAP** — README: RTCPeerConnection behind a proxy = unsolved ❌ |
+| `mediaDevices.enumerateDevices` | ❌ | ⚠️ `multimediaDevices` generated, **not injected** | ❌ | **GAP both** |
+| Permissions API (`Notification.permission`) | ✅ `notification_permission.js` (https only) | ✅ `fixPermissions` — **also** handles the http branch via `Permissions.query` | ✅ (FPScanner cross-checks the two) | Partial gap: no `Permissions.query` alignment |
+| `window.chrome` (`app`/`csi`/`loadTimes`/`runtime`) | ✅ `window_chrome.js` (212 lines) | ⚠️ `fixWindowChrome` sets `{}` — explicitly `todo` | — | Ultrastealth much stronger; but **`utils.stripErrorWithAnchor` is undefined** → `chrome.app.getDetails('x')` throws `ReferenceError`, not the real `TypeError` |
+| `chrome.runtime` / extension surface | ❌ | ❌ | — | **GAP** — fingerprint-scan.com probes extension resources (README) |
+| `Function.prototype.toString` masking | ✅ `_native_mask.js` (Proxy apply-trap; elegant, 17 lines) | ✅ `redirectToString` + `stripProxyFromErrors` (~90 lines, rewrites `Function.prototype.toString` globally) | — | Ultrastealth's is cleaner; suite's also scrubs **error stacks** |
+| `Error.stack` shape / proxy frames | ❌ | ✅ `stripProxyFromErrors`, `useStrictModeExceptions`, cyclic-`__proto__` handler | ✅ (FPScanner `errorTrace`) | **GAP** — a thrown error inside a ultrastealth Proxy leaks `at Object.apply` |
+| Worker context consistency | ⚠️ `worker_consistency.js` (see below) | ❌ **zero** — grep for `new Worker`/`SharedWorker`/`serviceWorker` across `packages/` returns nothing | — | Ultrastealth ahead; every suite-spoofed value is worker-contradicted |
+| Iframe context consistency | ❌ | ✅ `fixIframeContentWindow` (`srcdoc` + `contentWindow` proxy) | ✅ `fonts.ts`/`dom_blockers.ts` collect **inside an iframe** | **GAP** — see below |
+| `SharedArrayBuffer` presence | ❌ | ✅ `overrideStatic()` sets `undefined` | ❌ | Minor gap |
+| `history.length` | ❌ | ✅ randomised 2–6 | ❌ | **GAP** — `history.length === 1` is a classic fresh-automation tell |
+| CSS media features (`color-gamut`, `monochrome`, `contrast`, `forced-colors`, `inverted-colors`, `prefers-reduced-motion/transparency`, `hdr`) | ❌ | ⚠️ only forces `colorScheme: 'dark'` | ✅ 8 dedicated sources | **GAP both** |
+| `Math` transcendental fingerprint | ❌ | ❌ | ✅ `math.ts` (24 ops) | Not spoofable (V8-determined) — fine |
+| CPU architecture via NaN sign bit | ❌ | ❌ | ✅ `architecture.ts` | **Unspoofable in JS** — hard ceiling on any x86-claiming persona on ARM |
+| Storage APIs (`localStorage`/`sessionStorage`/`indexedDB`/`openDatabase`/cookies) | ❌ | ❌ | ✅ 5 sources | Low risk |
+| Ad-blocker DOM probes | ❌ | ❌ | ✅ `dom_blockers.ts` | Low risk |
+| Apple Pay / PCM / `cpuClass` | ❌ | ❌ | ✅ 3 sources | Safari/IE-only |
+| Gamepads, speech-synthesis voices, storage quota, `performance.now` resolution | ❌ | ❌ | ❌ | **GAP** — README lists `performance.now` "red pill" as ❌ unsolved industry-wide |
+| Playwright binding leaks | ✅ `playwright_fingerprint.js` | ❌ | — | ok |
+| CDP `Runtime.Enable` leak | ✅ `runtime_enable_fix.js` + rebrowser patches | ❌ | — | ok |
+| HTTP header set + **order** + `sec-ch-ua` | ❌ | ✅ `header-generator` (`headers-order.json`, `orderHeaders()`) | — | **GAP** — UA-CH headers vs JS `userAgentData` are unverified against each other |
+
+## fingerprint-suite: the generated-persona model
+
+**How generation works.** `FingerprintGenerator extends HeaderGenerator` ([`fingerprint-generator.ts:120`](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/fingerprint-generator/src/fingerprint-generator.ts)). It generates *headers* first, extracts the resulting `User-Agent`, pins that UA as a hard constraint, then samples the rest of the fingerprint from a **Bayesian network** trained on real traffic (`generateConsistentSampleWhenPossible`, [`bayesian-network.ts:55`](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/generative-bayesian-network/src/bayesian-network.ts); a 705 KB `fingerprint-network-definition.zip`). Consistency is not asserted by a human — it is a *property of conditional sampling*: `platform`, `oscpu`, `videoCard`, `screen`, `fonts`, `codecs`, `userAgentData.platformVersion` are all drawn conditioned on the same UA, and `accept-language` is back-propagated into `navigator.languages` so header and JS cannot disagree. Screen constraints filter the network's possible values and re-derive the constraint closure, rather than overwriting after the fact.
+
+**How injection works.** One `addInitScript` carrying `utils.js` + `const fp = {…}` + an `inject()` closure ([`fingerprint-injector.ts:196-283`](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/fingerprint-injector/src/fingerprint-injector.ts)). Everything routes through `overrideInstancePrototype` → `overrideGetterWithProxy` → `redefineProperty` + `redirectToString`, i.e. **prototype-level getters wrapped in error-stack-scrubbing Proxies** — the same conclusion `hardware_profile.js` reaches in prose, but applied uniformly to ~25 properties instead of 4. Puppeteer additionally gets `Page.setDeviceMetricsOverride` over CDP so screen metrics are enforced by the browser, not by JS.
+
+**What ultrastealth would gain.** (1) The persona stops being a constant. (2) `userAgentData` high-entropy hints, codecs, `productSub`/`vendor`/`oscpu`, `history.length`, `SharedArrayBuffer`, iframe `contentWindow`, and `Intl` all become covered in one step. (3) Header/UA-CH/JS agreement becomes structural. **What it would not gain:** fonts, `multimediaDevices` and `pluginsData` are *generated but never consumed* by `inject()` — verified by reading the destructuring block; and the suite has **zero worker coverage**, where ultrastealth is ahead.
+
+**License.** Apache-2.0 for code *and* data — `LICENSE.md`, `packages/fingerprint-generator/package.json:31`, and `apify_fingerprint_datapoints/README.md` all state Apache-2.0; the datapoints ship as a separately versioned package (`pyproject.toml`, v0.13.0) under the same terms. Apache-2.0 is MIT-compatible for redistribution (requires NOTICE/attribution + patent grant); no separate commercial terms on the generated fingerprint data were found.
+
+## Cross-surface consistency risks in ultrastealth's current persona
+
+**Framing first, because it is easy to get backwards.** `hardware_profile.js` is *not* a naive mismatched persona. It is a consistency-aware design: its header comment states values must track the real UA/OS (`X11; Linux x86_64`, `sec-ch-ua-platform: "Linux"`) and calls out that a `Win32` claim under a Linux UA is exactly what deviceandbrowserinfo/fingerprint-scan flag. It defines on `Navigator.prototype` **specifically** to keep `Object.getOwnPropertyNames(navigator)` empty (the rebrowser check). And it **deliberately abstains** from `hardwareConcurrency`, with an inline comment explaining that a fixed main-thread value would leak as a mismatch against the worker's real core count. The author already understood cross-surface contradiction and the JS-injection reachability limit. The risks below are where that design still breaks in practice — not where it was done carelessly.
+
+1. **The Linux persona is pinned, but the host is not. (Confirmed from source, and the sharpest exposure.)** `hardware_profile.js` forces `navigator.platform = 'Linux x86_64'` — correct on the Linux/Xvfb host it was written for. But `fetcher.py` treats macOS as a first-class host: `_is_macos()` is used at eight sites, including Chrome and Chromium user-data-dir resolution ([`fetcher.py:85,97`](../../../fetcher.py)) and host screen-size detection (170, 192), while Xvfb is gated to Linux only (278, 591). Critically, **`fetcher.py` never sets a `user_agent`** — the UA is whatever the real Chrome binary reports. So on a macOS host the browser emits `Macintosh; Intel Mac OS X …` and `sec-ch-ua-platform: "macOS"`, while the injected JS swears `Linux x86_64`. That is a three-way contradiction across UA / UA-CH / JS, and it is *the very check the file's own comment cites* — merely inverted. The fix is not to delete the assertion but to **derive it from the running host** (or, better, from a generated persona) rather than freeze it at authoring time. Note the benchmark itself ran on Darwin (`env.python` is a Clang build), so this exposure was live during the 91% run — though bypasses were off, so it did not actually fire.
+2. **WebGL vs everything.** A hardcoded `NVIDIA GeForce RTX 3060 … OpenGL 4.6.0` string sits on top of unpatched WebGL *parameters*, precisions and extension list, which on Xvfb still describe SwiftShader/llvmpipe. `MAX_TEXTURE_SIZE` and friends do not lie.
+3. **`languages`: main thread says `['en-US']`, workers say `['en-US','en']`.** `worker_consistency.js` hardcodes the two-element array; the main thread is left to Playwright's `locale: 'en-US'`. This is a **self-inflicted** `hasInconsistentWorkerValues` — the exact failure mode the file's own comment says it exists to prevent.
+4. **`devicePixelRatio: 2` + `Linux x86_64`.** `fetcher.py` forces `device_scale_factor: 2`; `screen_props.js` re-asserts 2. Retina-class DPR is a Mac/high-DPI signature; on a Linux persona with a 1440×900 fallback screen it is anomalous.
+5. **Window geometry.** `screen_props.js` hardcodes `outerWidth 1313 / outerHeight 754 / screenX 19` while `fetcher.py:624` launches with `--window-size={window_width},{window_height}` derived from the *host* screen. These disagree by default. Worse, assignment to `[Replaceable]` window properties converts a native getter into a plain data property — `Object.getOwnPropertyDescriptor(window,'outerWidth')` then returns `{value,writable:true}`, which CreepJS grades. (fingerprint-suite shares this weakness.)
+6. **Instance-level `defineProperty` on `navigator.plugins`.** `navigator_plugins.js` defines on the instance, making `Object.getOwnPropertyNames(navigator)` non-empty — the leak `hardware_profile.js` explicitly warns about and that bot-detector.rebrowser.net tests.
+7. **Timezone vs IP.** `America/New_York` is hardcoded regardless of exit IP. pixelscan/iphey grade exactly this correlation.
+8. **Canvas/audio noise vs stability.** `canvas_noise.js` seeds from `Date.now()` per page load, so the "stable" canvas hash differs across navigations of the same session — a cross-page-inconsistency signal, and the noise-based approach niespodd marks 🤮.
+
+## Worker & iframe context coverage
+
+`worker_consistency.js` is thinner than its name implies.
+
+- **Dedicated workers:** covered only for **same-origin, classic, string-URL** scripts, via a *synchronous* `XMLHttpRequest` re-fetch and blob re-hosting. Fails for: `type: 'module'` workers (the blob re-host breaks relative `import`), cross-origin URLs (CORS), `URL`-object arguments (`typeof url === 'string'` guard), and `blob:`/`data:` workers — which are explicitly passed through **unpatched**, and are the most common way a fingerprinting script spawns a worker. Sync XHR on the main thread is also a visible timing artifact.
+- **Shared workers:** the Proxy is installed but the `construct` trap just forwards. Zero coverage, honestly commented.
+- **Service workers:** **not patched at all**, despite the file header claiming otherwise. `service_workers: "allow"` in `fetcher.py:672` keeps that surface live.
+- **Nested / `blob:` / `srcdoc` iframes:** no coverage. Init scripts propagate to same-origin child frames, but `about:blank`/`srcdoc` frames created before injection expose the *un-patched* prototypes — and fingerprintjs deliberately measures fonts and DOM-blockers **inside an iframe** ([`fonts.ts` `withIframe`](/Users/mac/Projects/_prior-art/fingerprintjs/src/sources/fonts.ts)).
+
+fingerprint-suite is the mirror image: it has no worker handling whatsoever, but `fixIframeContentWindow()` ([`utils.js:663`](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/fingerprint-injector/src/utils.js)) hooks `document.createElement('iframe')`, intercepts `srcdoc`, and installs a `contentWindow` Proxy. Neither project solves both.
+
+**Does fingerprint-suite solve the module/cross-origin worker reach problem? No — it does not attempt it.** A grep across `packages/` for `new Worker`, `SharedWorker`, `serviceWorker`, `Target.setAutoAttach` and `Page.addScriptToEvaluateOnNewDocument` returns **zero matches**. Its only injection points are `browserContext.addInitScript()` ([`fingerprint-injector.ts:126`](/Users/mac/Projects/_prior-art/fingerprint-suite/packages/fingerprint-injector/src/fingerprint-injector.ts)) and `page.evaluateOnNewDocument()` (line 174) — page/frame realms only, never a worker global scope; its one CDP call is `Page.setDeviceMetricsOverride`, screen metrics only. The suite's fingerprint is therefore *silently main-thread-only*: every value it spoofs is contradicted by any worker reading the same property — strictly worse than ultrastealth's abstention.
+
+**So ultrastealth's `hardwareConcurrency` abstention cannot be retired by porting from the suite; the fix must be built.** The CDP-native path is `Target.setAutoAttach {autoAttach, waitForDebuggerOnStart, flatten}` to catch worker targets at creation, then `Page.addScriptToEvaluateOnNewDocument` on each attached session before resuming it. Because it operates on the *target* rather than the `Worker` constructor, it reaches module, cross-origin, `blob:` and service workers uniformly and retires the sync-XHR blob re-host entirely. Until it exists, the abstention is correct and should stay.
+
+## Diagnosing ultrastealth's known benchmark failures
+
+### areyouheadless (0/1)
+**Not a detection failure.** `raw.response` in [`bot_benchmark_obscura_vs_ultrastealth_2026-07-30.json`](../../research/bot_benchmark_obscura_vs_ultrastealth_2026-07-30.json) is `"502 Bad Gateway\nnginx/1.18.0 (Ubuntu)"` — for **both** methods. `arh.antoinevastel.com` is down. `test_areyouheadless` ([`bot_benchmark.py:907`](../../../bot_benchmark.py)) has no liveness guard, so an origin outage scores as a fingerprint failure. **Fix:** treat a non-200 / missing-verdict page as `severity="skip"`, not `fail`. **Confidence: confirmed from source.**
+
+### fingerprintscan (0/1)
+`raw.bot_risk_score = 50`, and the harness rule is `score < 50` — the run fails by exactly one point, on the boundary. This ran with bypasses **off**, so no GPU, plugin, or `window.chrome` spoof was active. Highest-probability contributors, ordered: (a) real WebGL renderer reporting SwiftShader/llvmpipe under Xvfb; (b) `navigator.languages` length 1; (c) `productSub`/`vendor`/`oscpu` never spoofed (FPScanner's `browserDescriptor`); (d) hardcoded `America/New_York` vs exit-IP geolocation. **Fix:** enable the bypass chain, then add `userAgentData` + `productSub`/`vendor` + a real `getExtension`-based WebGL patch. **Confidence: score is confirmed; attribution is hypothesis** — fp-scanner's source is not among the local clones.
+
+### infosimples (14/17)
+All three "failures" are **harness artifacts, confirmed from source.** The failing values are `"Detected 5 plugins"`, `"Detected 2 mime types"`, `"Detected 1 languages and using en-US"` — those are *healthy real-Chrome values*. The fallback extractor at [`bot_benchmark.py:849`](../../../bot_benchmark.py) computes `passed = !val.toLowerCase().includes('detected')`, so the word "Detected" in a benign value forces a fail. **Fix:** parse detect-headless's own `success`/`failed` cell classes instead of substring-matching. **Confidence: confirmed.** One real signal hides behind the artifact: `navigator.languages` of length 1 (Chrome normally reports `['en-US','en']`) and its worker mismatch (risk #3 above).
+
+### seleniumdetector (2/3)
+`meta.has_token: false`, `has_async_token: false`, verdict `"Chromedriver Detector Error!"`. The page defines `window.token` / `window.getAsyncToken` in the **main world**; the benchmark's `pre_eval_js` runs under `REBROWSER_PATCHES_RUNTIME_FIX_MODE=alwaysIsolated` (recorded in the results `env`), so it reads `undefined`, submits empty fields, and the page errors. The Runtime-leak fix is working *correctly* — the test simply cannot be driven from an isolated world. The same cause explains 3 of the 4 rebrowser failures (`window.dummyFn`, `getElementsByClassName`, `window.exposedFn` all report "test wasn't triggered", scored as fail). **Fix:** for this one site, read the tokens through a main-world binding or an injected in-page `<script>`; and score un-triggered probes as `skip`. **Confidence: confirmed from source.**
+
+## Recommended actions
+
+| # | Action | Signals fixed | Benchmark target | Effort |
+|---|---|---|---|---|
+| 1 | Flip `ULTRASTEALTH_BYPASSES` default to `on` (or set it in `bot_benchmark.py`) and re-baseline | all 13 scripts | unknown — the current 91% is an untested-code number | **S** |
+| 2 | Fix harness scoring: `skip` on origin 5xx (areyouheadless) and on un-triggered probes (rebrowser); parse infosimples' pass/fail classes | — | +1 areyouheadless, +3 infosimples, +3 rebrowser | **S** |
+| 3 | Drive seleniumdetector's tokens from the main world | — | +1 seleniumdetector | **S** |
+| 4 | Make the persona **host-derived, not authoring-time-frozen**: branch `platform`/WebGL/DPR on `_is_macos()`/`_is_linux()` (or skip the assertion when it would contradict the real UA), and take TZ from the exit IP. Keeps the file's existing consistency doctrine, removes the macOS exposure | risks 1, 4, 5, 7 | fingerprintscan, pixelscan, iphey, creepjs | **M** |
+| 5 | Unify `navigator.languages` across main thread + workers; move `navigator.plugins` to `Navigator.prototype` and give each plugin real `length`/mimeType children + patch `navigator.mimeTypes` | risks 3, 6; plugins/mimeTypes rows | infosimples, rebrowser, fingerprintscan | **S** |
+| 6 | Port `overrideUserAgentData`, `overrideCodecs`, `overrideIntlAPI`, `history.length`, `overrideStatic` from fingerprint-suite `utils.js` (Apache-2.0, attribution required) | 5 GAP rows | creepjs, fingerprintscan | **M** |
+| 7 | Port `fixIframeContentWindow` (borrowable from the suite) | iframe row | creepjs, browserscan | **M** |
+| 7b | **Build** CDP worker injection — `Target.setAutoAttach` + `Page.addScriptToEvaluateOnNewDocument` per worker target — replacing the sync-XHR blob re-host. Not portable from fingerprint-suite, which has no worker code at all. Unlocks safely controlling `hardwareConcurrency` | worker row; retires the documented abstention | creepjs, browserscan, fingerprintscan | **L** |
+| 8 | Replace `webgl_spoof.js`'s fake extension object with a real `getExtension` passthrough, and spoof `getParameter` numeric params/precisions to match the claimed GPU | 3 WebGL GAP rows | fingerprintscan, creepjs | **L** |
+| 9 | Adopt `fingerprint-generator` (or a distilled subset of its network) as the persona source, keeping ultrastealth's superior `_native_mask`, `window_chrome`, and worker layers on top | consistency, structurally | all fingerprint-graded sites | **L** |

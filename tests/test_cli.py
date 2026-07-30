@@ -53,6 +53,14 @@ class CliParseTests(unittest.TestCase):
         calls = self._run(["browser", "url"])
         self.assertEqual(calls[0], ("get", {"kind": "url"}))
 
+    def test_cookies_maps_to_call(self):
+        calls = self._run(["browser", "cookies"])
+        self.assertEqual(calls[0], ("cookies", {}))
+
+    def test_find_maps_to_call_with_query(self):
+        calls = self._run(["browser", "find", "login button"])
+        self.assertEqual(calls[0], ("find", {"query": "login button"}))
+
 
 if __name__ == "__main__":
     unittest.main()

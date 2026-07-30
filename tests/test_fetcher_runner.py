@@ -68,6 +68,16 @@ def fake_rebrowser_modules(chromium):
     }
 
 
+def fake_patchright_modules(chromium):
+    patchright_module = types.ModuleType("patchright")
+    async_api = types.ModuleType("patchright.async_api")
+    async_api.async_playwright = lambda: FakePlaywrightManager(chromium)
+    return {
+        "patchright": patchright_module,
+        "patchright.async_api": async_api,
+    }
+
+
 class FetcherRunnerTests(unittest.TestCase):
     def setUp(self):
         self._log_info_patcher = patch.object(fetcher.log, "info")
@@ -125,6 +135,36 @@ class FetcherRunnerTests(unittest.TestCase):
             "/Users/alice/Library/Application Support/Chromium",
         )
         self.assertIn("--profile-directory=Default", chromium.launch_kwargs["args"])
+
+    def test_temp_profile_runner_ignores_env_profile(self):
+        chromium = FakeChromium()
+        ensure_xvfb = Mock(return_value=None)
+
+        with patch.dict(sys.modules, fake_rebrowser_modules(chromium)), \
+             patch.object(sys, "platform", "darwin"), \
+             patch.dict(
+                 fetcher.os.environ,
+                 {
+                     "ULTRASTEALTH_USER_DATA_DIR": "/Users/alice/Library/Application Support/Google/Chrome",
+                     "ULTRASTEALTH_PROFILE_DIRECTORY": "Profile 6",
+                 },
+                 clear=True,
+             ), \
+             patch.object(fetcher.Path, "home", return_value=Path("/Users/alice")), \
+             patch.object(fetcher, "_find_chrome", return_value=MAC_CHROME), \
+             patch.object(fetcher, "_ensure_xvfb", ensure_xvfb):
+            us = fetcher.UltrastealthFetcher(headless=False, runner="chrome+temp-profile")
+            asyncio.run(us.start())
+            user_data_dir = chromium.user_data_dir
+            launch_args = chromium.launch_kwargs["args"]
+            asyncio.run(us.close())
+
+        self.assertNotEqual(
+            user_data_dir,
+            "/Users/alice/Library/Application Support/Google/Chrome",
+        )
+        self.assertTrue(Path(user_data_dir).name.startswith("ultrastealth_"))
+        self.assertNotIn("--profile-directory=Profile 6", launch_args)
 
     def test_custom_user_data_dir_uses_requested_profile_directory(self):
         chromium = FakeChromium()
@@ -268,6 +308,103 @@ class FetcherRunnerTests(unittest.TestCase):
 
         patcher.run.assert_called_once_with("apply")
         self.assertEqual(stdout.getvalue(), "")
+
+    def test_default_engine_is_rebrowser(self):
+        us = fetcher.UltrastealthFetcher(headless=False)
+        self.assertEqual(us.engine, fetcher.ENGINE_REBROWSER)
+
+    def test_normalize_engine_is_case_and_whitespace_insensitive(self):
+        self.assertEqual(fetcher._normalize_engine("Patchright"), fetcher.ENGINE_PATCHRIGHT)
+        self.assertEqual(fetcher._normalize_engine(" PATCHRIGHT "), fetcher.ENGINE_PATCHRIGHT)
+        self.assertEqual(fetcher._normalize_engine("Rebrowser"), fetcher.ENGINE_REBROWSER)
+        self.assertEqual(fetcher._normalize_engine(None), fetcher.ENGINE_REBROWSER)
+
+    def test_unknown_engine_falls_back_to_rebrowser_with_warning(self):
+        with patch.object(fetcher.log, "warning") as warning:
+            us = fetcher.UltrastealthFetcher(headless=False, engine="not-a-real-engine")
+
+        self.assertEqual(us.engine, fetcher.ENGINE_REBROWSER)
+        warning.assert_called_once()
+
+    def test_patchright_engine_skips_rebrowser_patch_and_uses_patchright_driver(self):
+        rebrowser_chromium = FakeChromium()
+        patchright_chromium = FakeChromium()
+        ensure_xvfb = Mock(return_value=None)
+        load_patch_rebrowser = Mock()
+
+        modules = {}
+        modules.update(fake_rebrowser_modules(rebrowser_chromium))
+        modules.update(fake_patchright_modules(patchright_chromium))
+
+        with patch.dict(sys.modules, modules), \
+             patch.object(sys, "platform", "darwin"), \
+             patch.dict(fetcher.os.environ, {}, clear=True), \
+             patch.object(fetcher.Path, "home", return_value=Path("/Users/alice")), \
+             patch.object(fetcher, "_find_chrome", return_value=MAC_CHROMIUM), \
+             patch.object(fetcher, "_ensure_xvfb", ensure_xvfb), \
+             patch.object(fetcher, "_load_patch_rebrowser", load_patch_rebrowser, create=True):
+            us = fetcher.UltrastealthFetcher(headless=False, engine="patchright")
+            self.assertEqual(us.engine, fetcher.ENGINE_PATCHRIGHT)
+            asyncio.run(us.start())
+            asyncio.run(us.close())
+
+        load_patch_rebrowser.assert_not_called()
+        self.assertEqual(len(patchright_chromium.launches), 1)
+        self.assertEqual(len(rebrowser_chromium.launches), 0)
+
+    def test_env_engine_selects_patchright_driver(self):
+        rebrowser_chromium = FakeChromium()
+        patchright_chromium = FakeChromium()
+        ensure_xvfb = Mock(return_value=None)
+        load_patch_rebrowser = Mock()
+
+        modules = {}
+        modules.update(fake_rebrowser_modules(rebrowser_chromium))
+        modules.update(fake_patchright_modules(patchright_chromium))
+
+        with patch.dict(sys.modules, modules), \
+             patch.object(sys, "platform", "darwin"), \
+             patch.dict(fetcher.os.environ, {"ULTRASTEALTH_ENGINE": "patchright"}, clear=True), \
+             patch.object(fetcher.Path, "home", return_value=Path("/Users/alice")), \
+             patch.object(fetcher, "_find_chrome", return_value=MAC_CHROMIUM), \
+             patch.object(fetcher, "_ensure_xvfb", ensure_xvfb), \
+             patch.object(fetcher, "_load_patch_rebrowser", load_patch_rebrowser, create=True):
+            us = fetcher.UltrastealthFetcher(headless=False)
+            self.assertEqual(us.engine, fetcher.ENGINE_PATCHRIGHT)
+            asyncio.run(us.start())
+            asyncio.run(us.close())
+
+        load_patch_rebrowser.assert_not_called()
+        self.assertEqual(len(patchright_chromium.launches), 1)
+        self.assertEqual(len(rebrowser_chromium.launches), 0)
+
+    def test_rebrowser_engine_explicit_still_applies_patch_and_ignores_patchright_driver(self):
+        rebrowser_chromium = FakeChromium()
+        patchright_chromium = FakeChromium()
+        ensure_xvfb = Mock(return_value=None)
+        patcher = Mock()
+        patcher.is_patched.side_effect = [False, True]
+        patcher.run.side_effect = lambda mode: 0
+
+        modules = {}
+        modules.update(fake_rebrowser_modules(rebrowser_chromium))
+        modules.update(fake_patchright_modules(patchright_chromium))
+
+        with patch.dict(sys.modules, modules), \
+             patch.object(sys, "platform", "darwin"), \
+             patch.dict(fetcher.os.environ, {}, clear=True), \
+             patch.object(fetcher.Path, "home", return_value=Path("/Users/alice")), \
+             patch.object(fetcher, "_find_chrome", return_value=MAC_CHROMIUM), \
+             patch.object(fetcher, "_ensure_xvfb", ensure_xvfb), \
+             patch.object(fetcher, "_load_patch_rebrowser", return_value=patcher, create=True):
+            us = fetcher.UltrastealthFetcher(headless=False, engine="rebrowser")
+            self.assertEqual(us.engine, fetcher.ENGINE_REBROWSER)
+            asyncio.run(us.start())
+            asyncio.run(us.close())
+
+        patcher.run.assert_called_once_with("apply")
+        self.assertEqual(len(rebrowser_chromium.launches), 1)
+        self.assertEqual(len(patchright_chromium.launches), 0)
 
     def test_default_profile_launch_failure_falls_back_to_temp_profile(self):
         chromium = FakeChromium(

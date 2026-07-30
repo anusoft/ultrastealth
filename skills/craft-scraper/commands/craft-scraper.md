@@ -32,7 +32,8 @@ Run the loop from `SKILL.md`:
    Diagnose → fix → re-run on failure.
 
 6. **Deliver** — propose the destination path, confirm with the user, write the
-   script there, then show `--help` and the final datum/row count.
+   script there, then show the two curl+bash bootstrap commands, `--help`, and
+   the final datum/row count.
 
 Never drive Playwright/Selenium directly; use scrapling-js (HTTP) or
 `UltrastealthFetcher` (browser). Always run JS with Bun and Python with

@@ -25,6 +25,21 @@ Two pillars decide everything:
 > https://anusoft.github.io/ultrastealth/#install . If MCP tools aren't
 > available, say so and stop; discovery depends on them.
 
+## Runtime bootstrap for emitted scripts
+
+When delivering any generated crawler, show a fresh-machine setup block before
+the run command. From the script's directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/anusoft/ultrastealth/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/anusoft/scrapling-js/main/install.sh | bash
+```
+
+Path A scripts need scrapling-js at runtime; Ultrastealth is still needed for
+the discovery/MCP loop and for any future Path B fallback. Path B scripts need
+Ultrastealth at runtime; keep the scrapling-js command in the setup block so the
+same folder can run either generated script type.
+
 ## The loop
 
 Track each step (a TODO per step) and do them in order. One action per step;
@@ -75,7 +90,8 @@ empty or suspiciously short results. Diagnose → fix → re-run on any failure.
 ### 6. Deliver
 Only when every CP is evidenced. Propose the destination path, **confirm it with
 the user**, write the script there, then show the user `--help` and the final
-datum/row count so they know how to rerun it.
+datum/row count so they know how to rerun it. Include the two curl+bash bootstrap
+commands from "Runtime bootstrap for emitted scripts".
 
 ## The quality bar (what makes a generated script "good")
 
